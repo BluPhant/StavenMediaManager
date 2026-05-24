@@ -343,6 +343,8 @@ const MovieMatch = {
 
     if (data.match) {
       this._renderMatch(data.match);
+    } else if (data.suggested_query) {
+      this.search();
     }
   },
 
