@@ -2,27 +2,22 @@
 <!--
   Unraid Community Applications template for StavenMediaManager.
 
-  BEFORE PUBLISHING:
-    Replace every occurrence of GITHUB_USERNAME below with your actual
-    GitHub username (the repo owner).  The image name must match what
-    GitHub Actions pushes to ghcr.io.
-
   To install manually on Unraid (without CA):
     Docker tab → Add Container → Template URL →
-    https://raw.githubusercontent.com/GITHUB_USERNAME/StavenMediaManager/main/unraid/StavenMediaManager.xml
+    https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/unraid/StavenMediaManager.xml
 
   To add to Community Applications:
     Apps tab → Settings → "Add template repository" →
-    GITHUB_USERNAME/StavenMediaManager
+    BluPhant/StavenMediaManager
 -->
 <Container version="2">
   <Name>StavenMediaManager</Name>
-  <Repository>ghcr.io/GITHUB_USERNAME/stavenmediamanager:latest</Repository>
-  <Registry>https://github.com/GITHUB_USERNAME/StavenMediaManager/pkgs/container/stavenmediamanager</Registry>
+  <Repository>ghcr.io/BluPhant/stavenmediamanager:latest</Repository>
+  <Registry>https://github.com/BluPhant/StavenMediaManager/pkgs/container/stavenmediamanager</Registry>
   <Network>bridge</Network>
   <Shell>bash</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/GITHUB_USERNAME/StavenMediaManager/issues</Support>
+  <Support>https://github.com/BluPhant/StavenMediaManager/issues</Support>
   <Overview>
     Local media management tool for Unraid.&#xA;&#xA;
     Enumerates incoming directories by media type (movies, audiobooks, music, games, etc.),
@@ -32,8 +27,8 @@
   </Overview>
   <Category>MediaApp: Tools:</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/GITHUB_USERNAME/StavenMediaManager/main/unraid/StavenMediaManager.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/GITHUB_USERNAME/StavenMediaManager/main/unraid/icon.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/unraid/StavenMediaManager.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/unraid/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
