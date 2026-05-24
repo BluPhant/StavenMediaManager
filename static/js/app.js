@@ -467,7 +467,7 @@ const Actions = {
   async extract(category, itemName) {
     try {
       const job = await API.post('/jobs/extract', { category, item_name: itemName });
-      JobPoller.track(job.id);
+      JobPoller.track(job.id, { type: 'extract', category, itemName });
       JobsPanel.open();
       toast(`Extraction started — Job #${job.id}`, 'success');
     } catch (e) {
@@ -478,7 +478,7 @@ const Actions = {
   async move(category, itemName) {
     try {
       const job = await API.post('/jobs/move', { category, item_name: itemName });
-      JobPoller.track(job.id);
+      JobPoller.track(job.id, { type: 'move', category, itemName });
       JobsPanel.open();
       toast(`Move started — Job #${job.id}`, 'success');
     } catch (e) {
@@ -569,10 +569,10 @@ const JobsPanel = {
 // ─────────────────────────────────────────────
 const JobPoller = {
   _fastTimer: null,
-  _tracked: new Set(),
+  _tracked: new Map(), // id → {type, category, itemName}
 
-  track(jobId) {
-    this._tracked.add(jobId);
+  track(jobId, ctx = {}) {
+    this._tracked.set(jobId, ctx);
     this._startFast();
   },
 
@@ -591,8 +591,11 @@ const JobPoller = {
     try {
       const active = await API.get('/jobs?active_only=true');
       const activeIds = new Set(active.map(j => j.id));
-      for (const id of [...this._tracked]) {
-        if (!activeIds.has(id)) this._tracked.delete(id);
+      for (const [id, ctx] of [...this._tracked]) {
+        if (!activeIds.has(id)) {
+          this._tracked.delete(id);
+          this._onComplete(id, ctx);
+        }
       }
     } catch (_) {}
     if (!this._tracked.size) {
@@ -600,6 +603,20 @@ const JobPoller = {
       this._fastTimer = null;
       await JobsPanel.refresh();
     }
+  },
+
+  async _onComplete(id, ctx) {
+    try {
+      const job = await API.get(`/jobs/${id}`);
+      if (job.status !== 'done') return;
+      const itemHash = `#/category/${enc(ctx.category)}/${enc(ctx.itemName)}`;
+      if (location.hash !== itemHash) return;
+      if (ctx.type === 'extract') {
+        Router.refresh();
+      } else if (ctx.type === 'move') {
+        Router.go(`/category/${enc(ctx.category)}`);
+      }
+    } catch (_) {}
   },
 };
 
