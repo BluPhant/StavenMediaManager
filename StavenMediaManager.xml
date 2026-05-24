@@ -66,11 +66,11 @@
     Target="/incoming"
     Default="/mnt/user/incoming"
     Mode="rw"
-    Description="Parent directory whose subdirectories are treated as media categories (e.g. /mnt/user/incoming contains Movies/, Audiobooks/, Music/). Read-write so extracted files can be placed in-place."
+    Description="Parent directory whose subdirectories are treated as media categories (e.g. /mnt/user/media-files/temp/incoming contains Movies/, Audiobooks/, Music/). Read-write so extracted files can be placed in-place."
     Type="Path"
     Display="always"
     Required="true"
-    Mask="false">/mnt/user/incoming</Config>
+    Mask="false">/mnt/user/media-files/temp/incoming</Config>
 
   <Config
     Name="TMDb API Key"
@@ -88,11 +88,11 @@
     Target="/media"
     Default="/mnt/user/media"
     Mode="rw"
-    Description="Destination media library root. Workflow actions will move processed content here."
+    Description="Destination media library root. Workflow actions will move processed content here (e.g. movies land in {Media Library}/movies/{Title (Year)}/)."
     Type="Path"
     Display="always"
     Required="false"
-    Mask="false">/mnt/user/media</Config>
+    Mask="false">/mnt/user/media-files</Config>
 
   <Config
     Name="Plex URL"
