@@ -16,14 +16,12 @@ _RELEASE_TAGS = re.compile(
     r"x264|x265|h264|h265|hevc|avc|xvid|divx|av1|"
     r"aac|ac3|dts|dd[25][_\-.]?1|truehd|flac|mp3|eac3|atmos|"
     r"extended|theatrical|directors?[_\-. ]?cut|remastered|unrated|uncut|"
+    r"dubbed|multi|truefrench|french|english|hindi|korean|"
     r"proper|repack|readnfo|internal|retail|sample|"
     r"yify|rarbg|ettv|eztv|fgt|sparks|ion10|tigole|qxr"
     r")\b",
     re.IGNORECASE,
 )
-
-# Scene release group suffix: -GRP at end of name
-_GROUP_SUFFIX = re.compile(r"\s*-[A-Za-z0-9]+$")
 
 
 def clean_for_search(raw: str) -> tuple[str, int | None]:
@@ -43,7 +41,40 @@ def clean_for_search(raw: str) -> tuple[str, int | None]:
     return name, year
 
 
+def _is_tag_word(word: str) -> bool:
+    """True for words that look like scene release tags: all-caps or mostly uppercase."""
+    if len(word) < 3:
+        return False
+    upper = sum(1 for c in word if c.isupper())
+    return upper / len(word) > 0.6
+
+
+def _search_candidates(query: str) -> list[str]:
+    """Return query variants: original first, then with tag-like words stripped
+    right-to-left, stopping before the query drops below 2 words."""
+    words = query.split()
+    tag_indices = sorted(
+        [i for i, w in enumerate(words) if _is_tag_word(w)],
+        reverse=True,  # rightmost first — scene tags cluster at the end
+    )
+    candidates = [query]
+    current = list(words)
+    for idx in tag_indices:
+        current.pop(idx)
+        if len(current) >= 2:
+            candidates.append(" ".join(current))
+    return candidates
+
+
 def search_tmdb(query: str, year: int | None, api_key: str) -> list[dict]:
+    for candidate in _search_candidates(query):
+        results = _tmdb_search(candidate, year, api_key)
+        if results:
+            return results
+    return []
+
+
+def _tmdb_search(query: str, year: int | None, api_key: str) -> list[dict]:
     params: dict[str, str] = {
         "api_key": api_key,
         "query": query,
