@@ -74,7 +74,24 @@ def run_extraction(job_id: int, source_path: str) -> None:
             )
             return
 
-    update_job(job_id, status="done", progress=100, message="Extraction complete.")
+    removed = _remove_rar_files(source_path)
+    update_job(job_id, status="done", progress=100, message=f"Extraction complete. Removed {removed} archive file(s).")
+
+
+def _remove_rar_files(directory: str) -> int:
+    """Delete all .rar and .rNN split files after successful extraction."""
+    count = 0
+    try:
+        for name in os.listdir(directory):
+            if re.search(r"\.(rar|r\d+)$", name, re.IGNORECASE):
+                try:
+                    os.remove(os.path.join(directory, name))
+                    count += 1
+                except OSError as exc:
+                    logger.warning(f"Could not remove {name}: {exc}")
+    except PermissionError:
+        pass
+    return count
 
 
 def _find_main_archives(directory: str) -> list[str]:
