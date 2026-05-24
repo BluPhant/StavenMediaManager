@@ -101,3 +101,19 @@ body {
   font-size: 0.68rem;
   letter-spacing: 0.02em;
 }
+
+/* ── Movie match result cards ── */
+.match-result-card {
+  cursor: pointer;
+  background: #1a1a1a;
+  border: 1px solid #2d2d2d;
+  transition: border-color 0.15s, transform 0.15s;
+  overflow: hidden;
+}
+.match-result-card:hover {
+  border-color: #0dcaf0;
+  transform: translateY(-2px);
+}
+.match-result-card .card-body {
+  background: #1a1a1a;
+}

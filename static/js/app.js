@@ -31,16 +31,16 @@ const API = {
 // Category → icon mapping
 // ─────────────────────────────────────────────
 const ICONS = [
-  [/audiobook/i,  'bi-book-half',          'text-warning'],
-  [/music/i,      'bi-music-note-beamed',   'text-danger'],
-  [/movie/i,      'bi-film',               'text-info'],
-  [/switch/i,     'bi-joystick',           'text-success'],
-  [/pc.?game/i,   'bi-pc-display',         'text-primary'],
-  [/game/i,       'bi-controller',         'text-success'],
-  [/tv|show/i,    'bi-tv',                 'text-info'],
-  [/comic/i,      'bi-book',              'text-warning'],
-  [/ebook/i,      'bi-journal-text',       'text-warning'],
-  [/software/i,   'bi-floppy',             'text-secondary'],
+  [/audiobook/i, 'bi-book-half',         'text-warning'],
+  [/music/i,     'bi-music-note-beamed', 'text-danger'],
+  [/movie/i,     'bi-film',             'text-info'],
+  [/switch/i,    'bi-joystick',         'text-success'],
+  [/pc.?game/i,  'bi-pc-display',       'text-primary'],
+  [/game/i,      'bi-controller',       'text-success'],
+  [/tv|show/i,   'bi-tv',               'text-info'],
+  [/comic/i,     'bi-book',             'text-warning'],
+  [/ebook/i,     'bi-journal-text',     'text-warning'],
+  [/software/i,  'bi-floppy',           'text-secondary'],
 ];
 
 function categoryIcon(name) {
@@ -54,26 +54,26 @@ function categoryIcon(name) {
 // File extension → icon
 // ─────────────────────────────────────────────
 const FILE_ICONS = {
-  mkv: 'bi-file-play text-success',
-  mp4: 'bi-file-play text-success',
-  avi: 'bi-file-play text-success',
-  mov: 'bi-file-play text-success',
-  mp3: 'bi-file-music text-danger',
+  mkv:  'bi-file-play text-success',
+  mp4:  'bi-file-play text-success',
+  avi:  'bi-file-play text-success',
+  mov:  'bi-file-play text-success',
+  mp3:  'bi-file-music text-danger',
   flac: 'bi-file-music text-danger',
-  m4a: 'bi-file-music text-danger',
-  m4b: 'bi-file-music text-warning',
-  aac: 'bi-file-music text-danger',
-  rar: 'bi-file-zip text-info',
-  zip: 'bi-file-zip text-info',
+  m4a:  'bi-file-music text-danger',
+  m4b:  'bi-file-music text-warning',
+  aac:  'bi-file-music text-danger',
+  rar:  'bi-file-zip text-info',
+  zip:  'bi-file-zip text-info',
   '7z': 'bi-file-zip text-info',
-  nfo: 'bi-file-text text-secondary',
-  jpg: 'bi-file-image text-pink',
-  jpeg: 'bi-file-image text-pink',
-  png: 'bi-file-image text-pink',
-  xci: 'bi-sd-card text-success',
-  nsp: 'bi-sd-card text-success',
-  iso: 'bi-disc text-primary',
-  exe: 'bi-file-binary text-warning',
+  nfo:  'bi-file-text text-secondary',
+  jpg:  'bi-file-image',
+  jpeg: 'bi-file-image',
+  png:  'bi-file-image',
+  xci:  'bi-sd-card text-success',
+  nsp:  'bi-sd-card text-success',
+  iso:  'bi-disc text-primary',
+  exe:  'bi-file-binary text-warning',
 };
 
 function fileIcon(name, isDir) {
@@ -134,9 +134,14 @@ const Views = {
 
   async category(name) {
     this._loading();
-    let items;
+
+    // Fetch items; for movie categories also fetch existing matches in parallel
+    const isMovies = /movie/i.test(name);
+    let items, matchMap = {};
     try {
-      items = await API.get(`/categories/${enc(name)}/items`);
+      const fetches = [API.get(`/categories/${enc(name)}/items`)];
+      if (isMovies) fetches.push(API.get(`/movies/matches?category=${enc(name)}`));
+      [items, matchMap = {}] = await Promise.all(fetches);
     } catch (e) {
       this._setApp(`<div class="alert alert-danger mt-2">Failed to load items: ${esc(e.message)}</div>`);
       return;
@@ -153,16 +158,21 @@ const Views = {
       return;
     }
 
-    const rows = items.map(it => `
-      <tr class="item-row" onclick="Router.go('/category/${enc(name)}/${enc(it.name)}')">
-        <td><i class="bi bi-folder me-2 text-warning"></i>${esc(it.name)}</td>
-        <td class="text-secondary text-nowrap">${it.size_human}</td>
-        <td>
-          ${it.has_rar
-            ? '<span class="badge bg-info badge-rar"><i class="bi bi-archive me-1"></i>RAR</span>'
-            : ''}
-        </td>
-      </tr>`).join('');
+    const rows = items.map(it => {
+      const match = matchMap[it.name];
+      return `
+        <tr class="item-row" onclick="Router.go('/category/${enc(name)}/${enc(it.name)}')">
+          <td>
+            <i class="bi bi-folder me-2 text-warning"></i>${esc(it.name)}
+            ${match ? `<span class="ms-2 text-success small" title="${esc(match.formatted_name)}"><i class="bi bi-check-circle-fill"></i></span>` : ''}
+          </td>
+          <td class="text-secondary text-nowrap">${it.size_human}</td>
+          <td class="text-nowrap">
+            ${it.has_rar ? '<span class="badge bg-info badge-rar me-1"><i class="bi bi-archive me-1"></i>RAR</span>' : ''}
+            ${match ? `<span class="badge bg-success badge-rar">${esc(match.formatted_name)}</span>` : ''}
+          </td>
+        </tr>`;
+    }).join('');
 
     this._setApp(crumb + `
       <div class="d-flex align-items-baseline gap-2 mb-3">
@@ -203,7 +213,7 @@ const Views = {
         </button>
       </div>` : '';
 
-    const rows = detail.files.map(f => `
+    const fileRows = detail.files.map(f => `
       <tr>
         <td><i class="bi ${fileIcon(f.name, f.is_dir)} me-2"></i>${esc(f.name)}</td>
         <td class="text-secondary text-nowrap">${f.is_dir ? '—' : f.size_human}</td>
@@ -213,11 +223,181 @@ const Views = {
       <div class="table-responsive">
         <table class="table table-hover table-dark file-table">
           <thead><tr class="text-secondary"><th>File</th><th>Size</th></tr></thead>
-          <tbody>${rows}</tbody>
+          <tbody>${fileRows}</tbody>
         </table>
       </div>`);
+
+    // Append movie match panel for movie categories
+    if (/movie/i.test(category)) {
+      document.getElementById('app').insertAdjacentHTML('beforeend', _matchPanelHtml());
+      MovieMatch.init(category, itemName);
+    }
   },
 };
+
+// ─────────────────────────────────────────────
+// Movie match panel HTML template
+// ─────────────────────────────────────────────
+function _matchPanelHtml() {
+  return `
+    <div class="card border-secondary mt-4" id="match-panel">
+      <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <span class="small fw-semibold"><i class="bi bi-film me-2 text-info"></i>IMDB Match</span>
+        <div id="match-status"></div>
+      </div>
+      <div class="card-body pb-2">
+        <div id="current-match"></div>
+        <div class="input-group input-group-sm mt-2">
+          <input type="text" id="match-query" class="form-control bg-dark text-white border-secondary"
+                 placeholder="Title to search…"
+                 onkeydown="if(event.key==='Enter') MovieMatch.search()">
+          <input type="number" id="match-year" class="form-control bg-dark text-white border-secondary"
+                 placeholder="Year" style="max-width:90px"
+                 onkeydown="if(event.key==='Enter') MovieMatch.search()">
+          <button class="btn btn-outline-secondary" onclick="MovieMatch.search()">
+            <i class="bi bi-search me-1"></i>Search
+          </button>
+        </div>
+        <div id="match-results" class="row g-2 mt-2"></div>
+      </div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────────
+// MovieMatch — IMDB/TMDb lookup & persistence
+// ─────────────────────────────────────────────
+const MovieMatch = {
+  _category: null,
+  _item: null,
+
+  async init(category, item) {
+    this._category = category;
+    this._item = item;
+
+    let data;
+    try {
+      data = await API.get(`/movies/match?category=${enc(category)}&item=${enc(item)}`);
+    } catch (e) {
+      _matchEl('match-results').innerHTML =
+        `<div class="col-12"><div class="text-danger small">${esc(e.message)}</div></div>`;
+      return;
+    }
+
+    _matchEl('match-query').value = data.suggested_query || '';
+    if (data.suggested_year) _matchEl('match-year').value = data.suggested_year;
+
+    if (data.match) {
+      this._renderMatch(data.match);
+    }
+  },
+
+  async search() {
+    const q = (_matchEl('match-query').value || '').trim();
+    if (!q) return;
+    const year = _matchEl('match-year').value;
+
+    const resultsEl = _matchEl('match-results');
+    resultsEl.innerHTML = `
+      <div class="col-12 text-secondary small py-2">
+        <span class="spinner-border spinner-border-sm me-2"></span>Searching TMDb…
+      </div>`;
+
+    let results;
+    try {
+      results = await API.get(`/movies/search?q=${enc(q)}${year ? `&year=${enc(year)}` : ''}`);
+    } catch (e) {
+      resultsEl.innerHTML =
+        `<div class="col-12"><div class="text-danger small">${esc(e.message)}</div></div>`;
+      return;
+    }
+
+    if (!results.length) {
+      resultsEl.innerHTML = '<div class="col-12 text-secondary small">No results found. Try adjusting the title or year.</div>';
+      return;
+    }
+
+    resultsEl.innerHTML = results.map(r => `
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <div class="card h-100 match-result-card"
+             onclick="MovieMatch.select(${r.tmdb_id}, ${jsStr(r.title)}, ${r.year ?? 'null'},
+                      ${jsStr(r.poster_url || '')}, ${jsStr(r.overview || '')}, ${jsStr(r.formatted_name)})">
+          ${r.poster_url
+            ? `<img src="${esc(r.poster_url)}" class="card-img-top" alt=""
+                    style="aspect-ratio:2/3;object-fit:cover">`
+            : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark"
+                    style="aspect-ratio:2/3"><i class="bi bi-film text-secondary" style="font-size:2rem"></i></div>`
+          }
+          <div class="card-body p-2">
+            <div class="small fw-semibold lh-sm">${esc(r.title)}</div>
+            <div class="text-secondary" style="font-size:.75rem">${r.year ?? '—'}</div>
+          </div>
+        </div>
+      </div>`).join('');
+  },
+
+  async select(tmdbId, title, year, posterUrl, overview, formattedName) {
+    try {
+      const match = await API.post('/movies/match', {
+        category: this._category,
+        item_name: this._item,
+        tmdb_id: tmdbId,
+        title,
+        year,
+        poster_url: posterUrl || null,
+        overview: overview || null,
+        formatted_name: formattedName,
+      });
+      this._renderMatch(match);
+      _matchEl('match-results').innerHTML = '';
+      toast(`Matched: ${formattedName}`, 'success');
+    } catch (e) {
+      toast(`Failed to save match: ${e.message}`, 'danger');
+    }
+  },
+
+  async clear() {
+    try {
+      await API.del(`/movies/match?category=${enc(this._category)}&item=${enc(this._item)}`);
+      _matchEl('current-match').innerHTML = '';
+      _matchEl('match-status').innerHTML = '';
+      toast('Match cleared', 'secondary');
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+  },
+
+  _renderMatch(match) {
+    _matchEl('match-status').innerHTML =
+      '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Matched</span>';
+
+    _matchEl('current-match').innerHTML = `
+      <div class="d-flex gap-3 align-items-start p-2 rounded mb-2
+                  bg-success bg-opacity-10 border border-success border-opacity-25">
+        ${match.poster_url
+          ? `<img src="${esc(match.poster_url)}" alt="" class="flex-shrink-0 rounded"
+                  style="width:54px;object-fit:cover">`
+          : `<div class="flex-shrink-0 rounded bg-dark d-flex align-items-center justify-content-center"
+                  style="width:54px;height:81px"><i class="bi bi-film text-secondary"></i></div>`
+        }
+        <div class="flex-grow-1 min-w-0">
+          <div class="fw-semibold">${esc(match.formatted_name)}</div>
+          ${match.overview
+            ? `<div class="text-secondary mt-1" style="font-size:.8rem;line-height:1.4">${esc(match.overview)}</div>`
+            : ''}
+          <div class="mt-2">
+            <code class="small text-success">${esc(match.formatted_name)}</code>
+            <span class="text-secondary small ms-1">← directory name to use</span>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-outline-danger flex-shrink-0"
+                onclick="MovieMatch.clear()" title="Clear match">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>`;
+  },
+};
+
+function _matchEl(id) { return document.getElementById(id); }
 
 // ─────────────────────────────────────────────
 // Actions
@@ -269,13 +449,13 @@ const JobsPanel = {
       return;
     }
 
-    const statusColor = { pending: 'warning', running: 'info', done: 'success', error: 'danger', cancelled: 'secondary' };
+    const statusColor = {
+      pending: 'warning', running: 'info', done: 'success', error: 'danger', cancelled: 'secondary',
+    };
 
     list.innerHTML = jobs.map(j => {
       const color = statusColor[j.status] || 'secondary';
       const isActive = j.status === 'pending' || j.status === 'running';
-      const canDelete = !isActive;
-
       return `
         <div class="job-item" id="job-item-${j.id}">
           <div class="d-flex justify-content-between align-items-start gap-2">
@@ -284,7 +464,7 @@ const JobsPanel = {
               <span class="small fw-semibold">${esc(j.item_name)}</span>
               <span class="text-secondary small ms-1">[${esc(j.type)}]</span>
             </div>
-            ${canDelete ? `
+            ${!isActive ? `
               <button class="btn btn-sm btn-link text-secondary p-0 flex-shrink-0"
                       onclick="JobsPanel.remove(${j.id})" title="Dismiss">
                 <i class="bi bi-x-lg"></i>
@@ -293,11 +473,11 @@ const JobsPanel = {
           ${isActive ? `
             <div class="progress mt-2">
               <div class="progress-bar progress-bar-striped progress-bar-animated bg-${color}"
-                   style="width:${j.progress}%" role="progressbar"
-                   aria-valuenow="${j.progress}" aria-valuemin="0" aria-valuemax="100"></div>
+                   style="width:${j.progress}%" role="progressbar"></div>
             </div>
-            <small class="text-secondary d-block mt-1">${j.progress}%${j.message ? ' — ' + esc(j.message) : ''}</small>
-          ` : (j.message ? `<small class="text-secondary d-block mt-1">${esc(j.message)}</small>` : '')}
+            <small class="text-secondary d-block mt-1">
+              ${j.progress}%${j.message ? ' — ' + esc(j.message) : ''}
+            </small>` : (j.message ? `<small class="text-secondary d-block mt-1">${esc(j.message)}</small>` : '')}
         </div>`;
     }).join('');
   },
@@ -313,11 +493,10 @@ const JobsPanel = {
 };
 
 // ─────────────────────────────────────────────
-// Job poller — fast when there are tracked active jobs
+// Job poller
 // ─────────────────────────────────────────────
 const JobPoller = {
   _fastTimer: null,
-  _slowTimer: null,
   _tracked: new Set(),
 
   track(jobId) {
@@ -326,8 +505,7 @@ const JobPoller = {
   },
 
   init() {
-    // Background ambient poll every 8s
-    this._slowTimer = setInterval(() => JobsPanel.refresh(), 8000);
+    setInterval(() => JobsPanel.refresh(), 8000);
   },
 
   _startFast() {
@@ -345,7 +523,6 @@ const JobPoller = {
         if (!activeIds.has(id)) this._tracked.delete(id);
       }
     } catch (_) {}
-
     if (!this._tracked.size) {
       clearInterval(this._fastTimer);
       this._fastTimer = null;
@@ -383,16 +560,15 @@ const Router = {
 function esc(str) {
   if (str == null) return '';
   return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function enc(str) { return encodeURIComponent(str); }
 
-// Produce a JS string literal safe for inline onclick attributes
-function jsStr(str) { return `'${String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`; }
+function jsStr(str) {
+  return `'${String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
 
 function breadcrumb(crumbs) {
   const items = crumbs.map(([label, href], i) => {
@@ -413,8 +589,7 @@ function toast(msg, type = 'info') {
       </div>
     </div>`);
   const el = document.getElementById(id);
-  const t = new bootstrap.Toast(el, { delay: 4500 });
-  t.show();
+  new bootstrap.Toast(el, { delay: 4500 }).show();
   el.addEventListener('hidden.bs.toast', () => el.remove());
 }
 

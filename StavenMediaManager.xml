@@ -73,6 +73,17 @@
     Mask="false">/mnt/user/incoming</Config>
 
   <Config
+    Name="TMDb API Key"
+    Target="TMDB_API_KEY"
+    Default=""
+    Mode=""
+    Description="Free API key from https://www.themoviedb.org/settings/api — required for IMDB movie matching. Leave blank to disable the feature."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="true"></Config>
+
+  <Config
     Name="Media Library"
     Target="/media"
     Default="/mnt/user/media"

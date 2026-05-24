@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     media_dir: str = "/media"
     # Mounted appdata volume — holds the SQLite DB and any future config files
     config_dir: str = "/config"
+    # Free API key from https://www.themoviedb.org/settings/api
+    tmdb_api_key: str = ""
 
     @property
     def database_url(self) -> str:
