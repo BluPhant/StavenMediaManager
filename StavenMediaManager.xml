@@ -27,7 +27,7 @@
     database container required.
   </Overview>
   <Category>MediaApp: Tools:</Category>
-  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <WebUI>http://[IP]:[PORT:8088]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/StavenMediaManager.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/unraid/icon.png</Icon>
   <ExtraParams/>
@@ -47,7 +47,7 @@
     Type="Port"
     Display="always"
     Required="true"
-    Mask="false">8080</Config>
+    Mask="false">8088</Config>
 
   <!-- ── Volumes ───────────────────────────────────────────────────────── -->
   <Config
