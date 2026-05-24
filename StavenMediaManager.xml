@@ -3,8 +3,9 @@
   Unraid Community Applications template for StavenMediaManager.
 
   To install manually on Unraid (without CA):
-    Docker tab → Add Container → Template URL →
-    https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/unraid/StavenMediaManager.xml
+    SSH into Unraid and run:
+    cd /boot/config/plugins/dockerMan/templates-user/
+    wget https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/StavenMediaManager.xml
 
   To add to Community Applications:
     Apps tab → Settings → "Add template repository" →
@@ -27,7 +28,7 @@
   </Overview>
   <Category>MediaApp: Tools:</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/unraid/StavenMediaManager.xml</TemplateURL>
+  <TemplateURL>https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/StavenMediaManager.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/unraid/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
