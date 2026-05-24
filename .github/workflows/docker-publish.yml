@@ -1,0 +1,71 @@
+name: Build & Publish Docker Image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  # github.repository is "owner/repo-name" — GHCR lowercases it automatically
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # branch push → :main (or :branch-name)
+            type=ref,event=branch
+            # PR → :pr-N
+            type=ref,event=pr
+            # semver tag v1.2.3 → :1.2.3 and :1.2
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            # default branch push → :latest
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          # Pass OCI labels + build-time ARGs together
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            IMAGE_TITLE=Media Manager
+            IMAGE_DESCRIPTION=Unraid media management tool — enumerate incoming directories, detect and extract RAR archives, track async jobs.
+            IMAGE_URL=https://github.com/${{ github.repository }}
+            IMAGE_SOURCE=https://github.com/${{ github.repository }}
+            IMAGE_VERSION=${{ steps.meta.outputs.version }}
+            IMAGE_REVISION=${{ github.sha }}
+            IMAGE_LICENSES=MIT
+          # Layer cache via GitHub Actions cache
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

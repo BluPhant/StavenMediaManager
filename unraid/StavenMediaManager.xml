@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<!--
+  Unraid Community Applications template for StavenMediaManager.
+
+  BEFORE PUBLISHING:
+    Replace every occurrence of GITHUB_USERNAME below with your actual
+    GitHub username (the repo owner).  The image name must match what
+    GitHub Actions pushes to ghcr.io.
+
+  To install manually on Unraid (without CA):
+    Docker tab → Add Container → Template URL →
+    https://raw.githubusercontent.com/GITHUB_USERNAME/StavenMediaManager/main/unraid/StavenMediaManager.xml
+
+  To add to Community Applications:
+    Apps tab → Settings → "Add template repository" →
+    GITHUB_USERNAME/StavenMediaManager
+-->
+<Container version="2">
+  <Name>StavenMediaManager</Name>
+  <Repository>ghcr.io/GITHUB_USERNAME/stavenmediamanager:latest</Repository>
+  <Registry>https://github.com/GITHUB_USERNAME/StavenMediaManager/pkgs/container/stavenmediamanager</Registry>
+  <Network>bridge</Network>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/GITHUB_USERNAME/StavenMediaManager/issues</Support>
+  <Overview>
+    Local media management tool for Unraid.&#xA;&#xA;
+    Enumerates incoming directories by media type (movies, audiobooks, music, games, etc.),
+    detects RAR archives, and extracts them with real-time async progress tracking.
+    All data is stored in a single SQLite file inside the appdata volume — no separate
+    database container required.
+  </Overview>
+  <Category>MediaApp: Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/GITHUB_USERNAME/StavenMediaManager/main/unraid/StavenMediaManager.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/GITHUB_USERNAME/StavenMediaManager/main/unraid/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+
+  <!-- ── Ports ─────────────────────────────────────────────────────────── -->
+  <Config
+    Name="WebUI Port"
+    Target="8080"
+    Default="8080"
+    Mode="tcp"
+    Description="Port the web interface listens on."
+    Type="Port"
+    Display="always"
+    Required="true"
+    Mask="false">8080</Config>
+
+  <!-- ── Volumes ───────────────────────────────────────────────────────── -->
+  <Config
+    Name="Appdata (Config &amp; Database)"
+    Target="/config"
+    Default="/mnt/user/appdata/StavenMediaManager"
+    Mode="rw"
+    Description="Persistent storage for the SQLite database and application settings. Back this up to preserve job history."
+    Type="Path"
+    Display="always"
+    Required="true"
+    Mask="false">/mnt/user/appdata/StavenMediaManager</Config>
+
+  <Config
+    Name="Incoming Directory"
+    Target="/incoming"
+    Default="/mnt/user/incoming"
+    Mode="rw"
+    Description="Parent directory whose subdirectories are treated as media categories (e.g. /mnt/user/incoming contains Movies/, Audiobooks/, Music/). Read-write so extracted files can be placed in-place."
+    Type="Path"
+    Display="always"
+    Required="true"
+    Mask="false">/mnt/user/incoming</Config>
+
+  <Config
+    Name="Media Library"
+    Target="/media"
+    Default="/mnt/user/media"
+    Mode="rw"
+    Description="Destination media library root. Workflow actions will move processed content here."
+    Type="Path"
+    Display="always"
+    Required="false"
+    Mask="false">/mnt/user/media</Config>
+
+</Container>

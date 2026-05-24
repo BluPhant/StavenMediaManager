@@ -1,0 +1,103 @@
+body {
+  background-color: #111;
+  padding-bottom: 130px;
+}
+
+/* ── Category grid ── */
+.category-card {
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+  border: 1px solid #2d2d2d;
+  background: #1a1a1a;
+}
+.category-card:hover {
+  transform: translateY(-3px);
+  border-color: #555;
+  background: #222;
+}
+.category-icon {
+  font-size: 2.8rem;
+  opacity: 0.85;
+}
+
+/* ── Item / file tables ── */
+.item-row {
+  cursor: pointer;
+}
+.item-row:hover td {
+  background: rgba(255, 255, 255, 0.04);
+}
+.file-table td,
+.file-table th {
+  vertical-align: middle;
+  font-size: 0.875rem;
+}
+
+/* ── Jobs panel ── */
+.jobs-panel {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #181818;
+  z-index: 1000;
+  max-height: 42vh;
+  overflow-y: auto;
+}
+.jobs-panel-header {
+  cursor: pointer;
+  user-select: none;
+  background: #202020;
+  min-height: 40px;
+}
+.jobs-panel-header:hover {
+  background: #282828;
+}
+.jobs-panel-body {
+  max-height: calc(42vh - 42px);
+  overflow-y: auto;
+}
+
+/* ── Individual job row ── */
+.job-item {
+  background: #1c1c1c;
+  border: 1px solid #2d2d2d;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+}
+.job-item .progress {
+  height: 5px;
+}
+
+/* ── Spinner animation ── */
+.spin {
+  display: inline-block;
+  animation: rotating 1.2s linear infinite;
+}
+@keyframes rotating {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Breadcrumbs ── */
+.breadcrumb-item a {
+  text-decoration: none;
+  color: #8a9bb0;
+}
+.breadcrumb-item a:hover {
+  color: #fff;
+}
+
+/* ── Empty state ── */
+.empty-state {
+  color: #555;
+}
+.empty-state i {
+  font-size: 3rem;
+}
+
+/* ── RAR badge ── */
+.badge-rar {
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+}

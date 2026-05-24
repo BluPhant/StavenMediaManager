@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    # For local dev use build above. For Unraid, use the published image:
+    # image: ghcr.io/YOUR_GITHUB_USERNAME/stavenmediamanager:latest
+    container_name: media-manager
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      - ${CONFIG_DIR:-./data/config}:/config
+      - ${INCOMING_DIR:-./data/incoming}:/incoming
+      - ${MEDIA_DIR:-./data/media}:/media
+    environment:
+      - INCOMING_DIR=/incoming
+      - MEDIA_DIR=/media
+      - CONFIG_DIR=/config
+    restart: unless-stopped
