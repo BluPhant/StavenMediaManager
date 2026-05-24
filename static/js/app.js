@@ -96,40 +96,80 @@ const Views = {
 
   async home() {
     this._loading();
-    let cats;
+    let cats, history;
     try {
-      cats = await API.get('/categories');
+      [cats, history] = await Promise.all([
+        API.get('/categories'),
+        API.get('/jobs?job_type=move&status=done&limit=20'),
+      ]);
     } catch (e) {
-      this._setApp(`<div class="alert alert-danger mt-2">Failed to load categories: ${esc(e.message)}</div>`);
+      this._setApp(`<div class="alert alert-danger mt-2">Failed to load: ${esc(e.message)}</div>`);
       return;
     }
 
+    // ── Category grid ──────────────────────────────────────────────────────
+    let catHtml = '';
     if (!cats.length) {
-      this._setApp(`
+      catHtml = `
         <div class="text-center py-5 empty-state">
           <i class="bi bi-folder-x"></i>
           <p class="mt-3">No categories found in the incoming directory.<br>
           <small class="text-secondary">Create subdirectories inside the mounted incoming path.</small></p>
-        </div>`);
-      return;
+        </div>`;
+    } else {
+      const cards = cats.map(c => {
+        const { icon, color } = categoryIcon(c.name);
+        return `
+          <div class="col-6 col-sm-4 col-md-3 col-xl-2">
+            <div class="card category-card text-center p-3 h-100"
+                 onclick="Router.go('/category/${enc(c.name)}')">
+              <div class="category-icon ${color}"><i class="bi ${icon}"></i></div>
+              <div class="fw-semibold mt-2">${esc(c.name)}</div>
+              <div class="text-secondary small mt-1">${c.item_count} item${c.item_count !== 1 ? 's' : ''}</div>
+            </div>
+          </div>`;
+      }).join('');
+      catHtml = `
+        <h6 class="text-secondary mb-3 text-uppercase" style="letter-spacing:.08em">Incoming Categories</h6>
+        <div class="row g-3 mb-4">${cards}</div>`;
     }
 
-    const cards = cats.map(c => {
-      const { icon, color } = categoryIcon(c.name);
-      return `
-        <div class="col-6 col-sm-4 col-md-3 col-xl-2">
-          <div class="card category-card text-center p-3 h-100"
-               onclick="Router.go('/category/${enc(c.name)}')">
-            <div class="category-icon ${color}"><i class="bi ${icon}"></i></div>
-            <div class="fw-semibold mt-2">${esc(c.name)}</div>
-            <div class="text-secondary small mt-1">${c.item_count} item${c.item_count !== 1 ? 's' : ''}</div>
-          </div>
+    // ── Processed history ──────────────────────────────────────────────────
+    let histHtml = '';
+    if (history.length) {
+      const rows = history.map(j => {
+        const title = j.dest_path ? j.dest_path.split('/').filter(Boolean).pop() : j.item_name;
+        const dest  = j.dest_path || '—';
+        const date  = j.created_at ? new Date(j.created_at).toLocaleDateString() : '—';
+        return `
+          <tr>
+            <td class="fw-semibold">${esc(title)}</td>
+            <td class="text-secondary text-capitalize">${esc(j.category)}</td>
+            <td class="text-secondary font-monospace small">${esc(dest)}</td>
+            <td class="text-secondary text-nowrap">${date}</td>
+            <td>
+              <button class="btn btn-sm btn-link text-secondary p-0"
+                      onclick="JobsPanel.remove(${j.id})" title="Remove from history">
+                <i class="bi bi-x-lg"></i>
+              </button>
+            </td>
+          </tr>`;
+      }).join('');
+      histHtml = `
+        <h6 class="text-secondary mb-3 text-uppercase" style="letter-spacing:.08em">
+          <i class="bi bi-check2-circle me-2"></i>Processed
+        </h6>
+        <div class="table-responsive">
+          <table class="table table-dark table-hover file-table">
+            <thead class="text-secondary">
+              <tr><th>Title</th><th>Category</th><th>Destination</th><th>Date</th><th></th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
         </div>`;
-    }).join('');
+    }
 
-    this._setApp(`
-      <h6 class="text-secondary mb-3 text-uppercase" style="letter-spacing:.08em">Incoming Categories</h6>
-      <div class="row g-3">${cards}</div>`);
+    this._setApp(catHtml + histHtml);
   },
 
   async category(name) {
@@ -191,9 +231,12 @@ const Views = {
 
   async item(category, itemName) {
     this._loading();
-    let detail;
+    const isMovies = /movie/i.test(category);
+    let detail, matchData;
     try {
-      detail = await API.get(`/categories/${enc(category)}/items/${enc(itemName)}`);
+      const fetches = [API.get(`/categories/${enc(category)}/items/${enc(itemName)}`)];
+      if (isMovies) fetches.push(API.get(`/movies/match?category=${enc(category)}&item=${enc(itemName)}`));
+      [detail, matchData] = await Promise.all(fetches);
     } catch (e) {
       this._setApp(`<div class="alert alert-danger mt-2">Failed to load item: ${esc(e.message)}</div>`);
       return;
@@ -205,13 +248,25 @@ const Views = {
       [esc(itemName)],
     ]);
 
-    const actions = detail.has_rar ? `
-      <div class="mb-3 d-flex gap-2 flex-wrap">
+    const hasMatch = !!(matchData && matchData.match);
+    const actionBtns = [];
+    if (detail.has_rar) {
+      actionBtns.push(`
         <button class="btn btn-primary btn-sm"
                 onclick="Actions.extract(${jsStr(category)}, ${jsStr(itemName)})">
           <i class="bi bi-archive me-1"></i>Extract RAR
-        </button>
-      </div>` : '';
+        </button>`);
+    }
+    if (isMovies) {
+      actionBtns.push(`
+        <button class="btn btn-success btn-sm" id="btn-move-library"
+                ${!hasMatch ? 'disabled title="Save an IMDB match first"' : ''}
+                onclick="Actions.move(${jsStr(category)}, ${jsStr(itemName)})">
+          <i class="bi bi-box-arrow-right me-1"></i>Move to Library
+        </button>`);
+    }
+    const actionsHtml = actionBtns.length ? `
+      <div class="mb-3 d-flex gap-2 flex-wrap">${actionBtns.join('')}</div>` : '';
 
     const fileRows = detail.files.map(f => `
       <tr>
@@ -219,7 +274,7 @@ const Views = {
         <td class="text-secondary text-nowrap">${f.is_dir ? '—' : f.size_human}</td>
       </tr>`).join('');
 
-    this._setApp(crumb + actions + `
+    this._setApp(crumb + (isMovies ? _matchPanelHtml() : '') + actionsHtml + `
       <div class="table-responsive">
         <table class="table table-hover table-dark file-table">
           <thead><tr class="text-secondary"><th>File</th><th>Size</th></tr></thead>
@@ -227,10 +282,8 @@ const Views = {
         </table>
       </div>`);
 
-    // Append movie match panel for movie categories
-    if (/movie/i.test(category)) {
-      document.getElementById('app').insertAdjacentHTML('beforeend', _matchPanelHtml());
-      MovieMatch.init(category, itemName);
+    if (isMovies) {
+      MovieMatch.init(category, itemName, matchData);
     }
   },
 };
@@ -270,17 +323,19 @@ const MovieMatch = {
   _category: null,
   _item: null,
 
-  async init(category, item) {
+  async init(category, item, prefetchedData) {
     this._category = category;
     this._item = item;
 
-    let data;
-    try {
-      data = await API.get(`/movies/match?category=${enc(category)}&item=${enc(item)}`);
-    } catch (e) {
-      _matchEl('match-results').innerHTML =
-        `<div class="col-12"><div class="text-danger small">${esc(e.message)}</div></div>`;
-      return;
+    let data = prefetchedData;
+    if (!data) {
+      try {
+        data = await API.get(`/movies/match?category=${enc(category)}&item=${enc(item)}`);
+      } catch (e) {
+        _matchEl('match-results').innerHTML =
+          `<div class="col-12"><div class="text-danger small">${esc(e.message)}</div></div>`;
+        return;
+      }
     }
 
     _matchEl('match-query').value = data.suggested_query || '';
@@ -360,6 +415,8 @@ const MovieMatch = {
       await API.del(`/movies/match?category=${enc(this._category)}&item=${enc(this._item)}`);
       _matchEl('current-match').innerHTML = '';
       _matchEl('match-status').innerHTML = '';
+      const moveBtn = document.getElementById('btn-move-library');
+      if (moveBtn) { moveBtn.disabled = true; moveBtn.title = 'Save an IMDB match first'; }
       toast('Match cleared', 'secondary');
     } catch (e) {
       toast(e.message, 'danger');
@@ -369,6 +426,8 @@ const MovieMatch = {
   _renderMatch(match) {
     _matchEl('match-status').innerHTML =
       '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Matched</span>';
+    const moveBtn = document.getElementById('btn-move-library');
+    if (moveBtn) { moveBtn.disabled = false; moveBtn.title = ''; }
 
     _matchEl('current-match').innerHTML = `
       <div class="d-flex gap-3 align-items-start p-2 rounded mb-2
@@ -411,6 +470,17 @@ const Actions = {
       toast(`Extraction started — Job #${job.id}`, 'success');
     } catch (e) {
       toast(`Could not start extraction: ${e.message}`, 'danger');
+    }
+  },
+
+  async move(category, itemName) {
+    try {
+      const job = await API.post('/jobs/move', { category, item_name: itemName });
+      JobPoller.track(job.id);
+      JobsPanel.open();
+      toast(`Move started — Job #${job.id}`, 'success');
+    } catch (e) {
+      toast(`Could not start move: ${e.message}`, 'danger');
     }
   },
 };

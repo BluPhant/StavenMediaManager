@@ -32,6 +32,13 @@ def submit_extraction(job_id: int, source_path: str) -> None:
     _executor.submit(_guarded, job_id, run_extraction, source_path)
 
 
+def submit_move(job_id: int, source_path: str, formatted_name: str, category: str) -> None:
+    from ..services.mover import run_move
+
+    update_job(job_id, status="running", progress=0)
+    _executor.submit(_guarded, job_id, run_move, source_path, formatted_name, category)
+
+
 def _guarded(job_id: int, func, *args) -> None:
     try:
         func(job_id, *args)
