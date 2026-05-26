@@ -125,6 +125,17 @@ def create_move_job(req: MoveRequest, db: Session = Depends(get_db)):
     return job
 
 
+@router.post("/{job_id}/cancel")
+def cancel_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status not in ("pending", "running"):
+        raise HTTPException(status_code=400, detail="Job is not active")
+    job_manager.request_cancel(job_id)
+    return {"ok": True, "message": "Cancel requested — job will stop at next checkpoint"}
+
+
 @router.delete("/{job_id}")
 def delete_job(job_id: int, db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id).first()

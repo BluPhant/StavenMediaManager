@@ -615,11 +615,15 @@ const JobsPanel = {
               <span class="small fw-semibold">${esc(j.item_name)}</span>
               <span class="text-secondary small ms-1">[${esc(j.type)}]</span>
             </div>
-            ${!isActive ? `
+            ${isActive ? `
+              <button class="btn btn-sm btn-link text-danger p-0 flex-shrink-0"
+                      onclick="JobsPanel.cancel(${j.id})" title="Cancel job">
+                <i class="bi bi-stop-circle"></i>
+              </button>` : `
               <button class="btn btn-sm btn-link text-secondary p-0 flex-shrink-0"
                       onclick="JobsPanel.remove(${j.id})" title="Dismiss">
                 <i class="bi bi-x-lg"></i>
-              </button>` : ''}
+              </button>`}
           </div>
           ${isActive ? `
             <div class="progress mt-2">
@@ -631,6 +635,16 @@ const JobsPanel = {
             </small>` : (j.message ? `<small class="text-secondary d-block mt-1">${esc(j.message)}</small>` : '')}
         </div>`;
     }).join('');
+  },
+
+  async cancel(id) {
+    try {
+      await API.post(`/jobs/${id}/cancel`, {});
+      toast('Cancel requested — job will stop shortly.', 'warning');
+      this.refresh();
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
   },
 
   async remove(id) {

@@ -8,8 +8,11 @@ Compatible with usbx.me / Ultra.cc shared seedboxes:
 All credentials come from environment variables (see config.py).
 No secrets are stored in this file.
 """
+import http.client
 import logging
 import os
+import socket
+import ssl
 import stat
 import xmlrpc.client
 from urllib.parse import urlparse, urlunparse
@@ -81,6 +84,20 @@ def detect_type(label: str, file_paths: list[str]) -> str:
     return max(votes, key=votes.get) if votes else "_unsorted"
 
 
+# ── XMLRPC transport with timeout ────────────────────────────────────────────
+
+class _TimeoutTransport(xmlrpc.client.SafeTransport):
+    """HTTPS transport that enforces a socket-level timeout."""
+    def __init__(self, timeout: int = 30):
+        super().__init__()
+        self._timeout = timeout
+
+    def make_connection(self, host):
+        conn = xmlrpc.client.SafeTransport.make_connection(self, host)
+        conn.timeout = self._timeout
+        return conn
+
+
 # ── rTorrent source ───────────────────────────────────────────────────────────
 
 class RtorrentSource(BaseSource):
@@ -99,7 +116,7 @@ class RtorrentSource(BaseSource):
     # ── XMLRPC ───────────────────────────────────────────────────────────────
 
     def _proxy(self) -> xmlrpc.client.ServerProxy:
-        """Build an XMLRPC proxy with credentials injected into the URL."""
+        """Build an XMLRPC proxy with credentials and a 30s timeout."""
         url = settings.rtorrent_url
         if settings.rtorrent_user:
             parsed = urlparse(url)
@@ -107,7 +124,9 @@ class RtorrentSource(BaseSource):
             if parsed.port:
                 auth_netloc += f":{parsed.port}"
             url = urlunparse(parsed._replace(netloc=auth_netloc))
-        return xmlrpc.client.ServerProxy(url)
+
+        transport = _TimeoutTransport(timeout=30)
+        return xmlrpc.client.ServerProxy(url, transport=transport)
 
     def list_ready(self) -> list[SourceItem]:
         proxy = self._proxy()
@@ -115,6 +134,7 @@ class RtorrentSource(BaseSource):
 
         # Fetch all torrents with relevant fields
         # d.custom1 = ruTorrent label
+        logger.info(f"Connecting to rTorrent XMLRPC: {settings.rtorrent_url}")
         try:
             rows = proxy.d.multicall2(
                 "", "main",
@@ -126,7 +146,9 @@ class RtorrentSource(BaseSource):
                 "d.size_bytes=",
                 "d.is_multi_file=",
             )
+            logger.info(f"rTorrent returned {len(rows)} torrent(s), filtering by tag='{tag}'")
         except Exception as exc:
+            logger.error(f"rTorrent XMLRPC call failed: {exc}")
             raise RuntimeError(f"rTorrent XMLRPC error: {exc}") from exc
 
         items: list[SourceItem] = []

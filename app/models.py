@@ -40,3 +40,18 @@ class MovieMatch(Base):
     __table_args__ = (
         UniqueConstraint("category", "item_name", name="uq_movie_match_item"),
     )
+
+
+class SyncedItem(Base):
+    """Tracks torrent hashes that have already been imported, preventing re-download."""
+    __tablename__ = "synced_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source = Column(String(50), nullable=False)   # e.g. "rtorrent"
+    item_id = Column(String(200), nullable=False)  # torrent hash
+    name = Column(String(500), nullable=True)
+    synced_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source", "item_id", name="uq_synced_item"),
+    )
