@@ -104,9 +104,10 @@ def run_sync(job_id: int) -> None:
             message=f"[{idx+1}/{total}] {item.name} → {item.suggested_type}/",
         )
 
-        def _progress(pct: int, filename: str, _base=base_pct, _end=end_pct, _name=item.name) -> None:
+        def _progress(pct: int, filename: str, mbps: float = 0.0, _base=base_pct, _end=end_pct, _name=item.name) -> None:
             scaled = _base + int(pct / 100 * (_end - _base))
-            update_job(job_id, progress=scaled, message=f"{_name} / {filename} {pct}%")
+            speed_str = f" @ {mbps:.1f} MB/s" if mbps > 0 else ""
+            update_job(job_id, progress=scaled, message=f"{_name} / {filename} {pct}%{speed_str}")
 
         try:
             source.download(item, dest_dir, progress_cb=_progress)

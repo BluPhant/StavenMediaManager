@@ -125,6 +125,7 @@ def _ftps_connect() -> ftplib.FTP_TLS:
 
 def _download_one(ftp_path: str, local_path: str, progress_cb=None) -> None:
     """Download a single file via a fresh FTPS connection."""
+    import time
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
     ftp = _ftps_connect()
     try:
@@ -134,15 +135,41 @@ def _download_one(ftp_path: str, local_path: str, progress_cb=None) -> None:
             size = 1
         transferred = [0]
         filename = os.path.basename(local_path)
+        size_mb = size / 1024 / 1024
+        t_start = time.monotonic()
+        last_log = [t_start]  # throttle log lines to once per 5 s
+
+        logger.info(f"FTPS ↓ START  {filename}  ({size_mb:.1f} MB)")
 
         with open(local_path, "wb") as f:
             def _cb(chunk: bytes) -> None:
                 f.write(chunk)
                 transferred[0] += len(chunk)
+                now = time.monotonic()
+                elapsed = max(now - t_start, 0.001)
+                mbps = (transferred[0] / 1024 / 1024) / elapsed
+
+                if now - last_log[0] >= 5.0:
+                    pct = int(transferred[0] / size * 100)
+                    logger.info(
+                        f"FTPS ↓        {filename}  "
+                        f"{transferred[0]/1024/1024:.1f}/{size_mb:.1f} MB  "
+                        f"{pct}%  {mbps:.1f} MB/s"
+                    )
+                    last_log[0] = now
+
                 if progress_cb:
-                    progress_cb(int(transferred[0] / size * 100), filename)
+                    pct = int(transferred[0] / size * 100)
+                    progress_cb(pct, filename, mbps)
 
             ftp.retrbinary(f"RETR {ftp_path}", _cb, blocksize=262144)
+
+        elapsed = max(time.monotonic() - t_start, 0.001)
+        avg_mbps = size_mb / elapsed
+        logger.info(
+            f"FTPS ↓ DONE   {filename}  "
+            f"{size_mb:.1f} MB in {elapsed:.1f}s  avg {avg_mbps:.1f} MB/s"
+        )
     finally:
         try:
             ftp.quit()
