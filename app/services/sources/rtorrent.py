@@ -181,13 +181,8 @@ class RtorrentSource(BaseSource):
         return items
 
     def mark_done(self, item: SourceItem) -> None:
-        """Append '-imported' to the label so this torrent won't be picked up again."""
-        try:
-            proxy = self._proxy()
-            new_label = f"{item.metadata.get('label', settings.rtorrent_tag)}-imported"
-            proxy.d.custom1.set(item.id, new_label)
-        except Exception as exc:
-            logger.warning(f"Could not update label for {item.name}: {exc}")
+        """No-op — import state is tracked locally in synced_items, not on the remote."""
+        pass
 
     # ── SFTP download ─────────────────────────────────────────────────────────
 
