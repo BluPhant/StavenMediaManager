@@ -11,7 +11,6 @@ No secrets are stored in this file.
 import logging
 import os
 import stat
-import time
 import xmlrpc.client
 from urllib.parse import urlparse, urlunparse
 
@@ -112,18 +111,16 @@ class RtorrentSource(BaseSource):
 
     def list_ready(self) -> list[SourceItem]:
         proxy = self._proxy()
-        cutoff = int(time.time()) - settings.rtorrent_lookback_hours * 3600
         tag = settings.rtorrent_tag.lower()
 
         # Fetch all torrents with relevant fields
-        # d.custom1 = ruTorrent label; d.completion_on = unix timestamp of completion
+        # d.custom1 = ruTorrent label
         try:
             rows = proxy.d.multicall2(
                 "", "main",
                 "d.name=",
                 "d.custom1=",
                 "d.directory=",
-                "d.completion_on=",
                 "d.hash=",
                 "d.complete=",
                 "d.size_bytes=",
@@ -133,12 +130,10 @@ class RtorrentSource(BaseSource):
             raise RuntimeError(f"rTorrent XMLRPC error: {exc}") from exc
 
         items: list[SourceItem] = []
-        for name, label, directory, finished_at, hash_, complete, size, is_multi in rows:
+        for name, label, directory, hash_, complete, size, is_multi in rows:
             if not complete:
                 continue
             if tag and label.lower().strip() != tag:
-                continue
-            if finished_at and int(finished_at) < cutoff:
                 continue
 
             # Multi-file torrents: directory is the torrent root folder

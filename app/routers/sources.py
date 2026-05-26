@@ -19,7 +19,6 @@ def sources_status():
             "configured": rt.is_configured(),
             "url": settings.rtorrent_url or None,
             "tag": settings.rtorrent_tag,
-            "lookback_hours": settings.rtorrent_lookback_hours,
             "ssh_host": settings.rtorrent_ssh_host or None,
         }
     }

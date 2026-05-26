@@ -120,7 +120,6 @@ const Views = {
             <span class="fw-semibold small">Seedbox Sync</span>
             <span class="text-secondary small ms-2">
               tag: <code class="text-info">${esc(rt.tag)}</code>
-              &nbsp;·&nbsp; last ${esc(String(rt.lookback_hours))}h
               &nbsp;·&nbsp; ${esc(rt.ssh_host)}
             </span>
           </div>
