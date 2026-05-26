@@ -19,6 +19,20 @@ _STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 async def lifespan(app: FastAPI):
     logger.info("Creating database tables if needed...")
     Base.metadata.create_all(bind=engine)
+    # Mark any jobs left in running/pending state as cancelled (from a previous crash/restart)
+    from .database import SessionLocal
+    from .models import Job
+    db = SessionLocal()
+    try:
+        stale = db.query(Job).filter(Job.status.in_(["running", "pending"])).all()
+        for job in stale:
+            job.status = "cancelled"
+            job.message = (job.message or "") + " (cancelled: server restarted)"
+            logger.warning(f"Marked stale job {job.id} ({job.type}) as cancelled on startup")
+        if stale:
+            db.commit()
+    finally:
+        db.close()
     logger.info("Startup complete.")
     yield
 
