@@ -17,6 +17,28 @@ class Settings(BaseSettings):
     plex_url: str = ""
     plex_token: str = ""
 
+    # ── rTorrent / seedbox sync (optional) ────────────────────────────────
+    # RTORRENT_URL        e.g. https://username.servername.usbx.me/RPC2
+    # RTORRENT_USER       HTTP basic auth username
+    # RTORRENT_PASS       HTTP basic auth password
+    # RTORRENT_TAG        ruTorrent label to watch (e.g. "import")
+    # RTORRENT_LOOKBACK_HOURS  how far back to check for completed torrents
+    # RTORRENT_SSH_HOST   e.g. servername.usbx.me
+    # RTORRENT_SSH_PORT   default 22
+    # RTORRENT_SSH_USER   SSH username (usually same as RTORRENT_USER)
+    # RTORRENT_SSH_KEY_PATH  path to mounted SSH private key (e.g. /config/ssh/id_rsa)
+    # RTORRENT_SSH_PASS   SSH password — used only if no key path is set
+    rtorrent_url: str = ""
+    rtorrent_user: str = ""
+    rtorrent_pass: str = ""
+    rtorrent_tag: str = "import"
+    rtorrent_lookback_hours: int = 24
+    rtorrent_ssh_host: str = ""
+    rtorrent_ssh_port: int = 22
+    rtorrent_ssh_user: str = ""
+    rtorrent_ssh_key_path: str = ""
+    rtorrent_ssh_pass: str = ""
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{os.path.join(self.config_dir, 'media_manager.db')}"

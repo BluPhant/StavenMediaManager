@@ -23,7 +23,7 @@ LABEL org.opencontainers.image.licenses="${IMAGE_LICENSES}"
 
 # ── System deps ───────────────────────────────────────────────────────────────
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends p7zip-full && \
+    apt-get install -y --no-install-recommends p7zip-full openssh-client && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Python deps ───────────────────────────────────────────────────────────────

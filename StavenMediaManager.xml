@@ -94,6 +94,106 @@
     Required="false"
     Mask="false">/mnt/user/media-files</Config>
 
+  <!-- ── rTorrent / Seedbox Sync (optional) ──────────────────────────────── -->
+  <Config
+    Name="rTorrent XMLRPC URL"
+    Target="RTORRENT_URL"
+    Default=""
+    Mode=""
+    Description="XMLRPC endpoint for your rTorrent instance, e.g. https://username.servername.usbx.me/RPC2"
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
+    Name="rTorrent Username"
+    Target="RTORRENT_USER"
+    Default=""
+    Mode=""
+    Description="HTTP Basic Auth username for the XMLRPC endpoint."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
+    Name="rTorrent Password"
+    Target="RTORRENT_PASS"
+    Default=""
+    Mode=""
+    Description="HTTP Basic Auth password for the XMLRPC endpoint."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="true"></Config>
+
+  <Config
+    Name="rTorrent Import Tag"
+    Target="RTORRENT_TAG"
+    Default="import"
+    Mode=""
+    Description="ruTorrent label to watch for importing (e.g. 'import'). After download the label is renamed to '{tag}-imported'."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false">import</Config>
+
+  <Config
+    Name="rTorrent Lookback Hours"
+    Target="RTORRENT_LOOKBACK_HOURS"
+    Default="24"
+    Mode=""
+    Description="How many hours back to check for completed torrents."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false">24</Config>
+
+  <Config
+    Name="Seedbox SSH Host"
+    Target="RTORRENT_SSH_HOST"
+    Default=""
+    Mode=""
+    Description="SSH hostname for file download, e.g. servername.usbx.me"
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
+    Name="Seedbox SSH User"
+    Target="RTORRENT_SSH_USER"
+    Default=""
+    Mode=""
+    Description="SSH username (usually the same as your rTorrent username)."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
+    Name="Seedbox SSH Password"
+    Target="RTORRENT_SSH_PASS"
+    Default=""
+    Mode=""
+    Description="SSH password. Leave blank if using an SSH key instead."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="true"></Config>
+
+  <Config
+    Name="Seedbox SSH Key Path"
+    Target="RTORRENT_SSH_KEY_PATH"
+    Default="/config/ssh/id_rsa"
+    Mode=""
+    Description="Path inside the container to your SSH private key. Mount the key file as a volume at this path."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false">/config/ssh/id_rsa</Config>
+
   <Config
     Name="Plex URL"
     Target="PLEX_URL"

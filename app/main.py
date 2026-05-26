@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .database import Base, engine
-from .routers import categories, jobs, movies
+from .routers import categories, jobs, movies, sources
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ app = FastAPI(title="Media Manager", lifespan=lifespan)
 app.include_router(categories.router, prefix="/api")
 app.include_router(jobs.router, prefix="/api")
 app.include_router(movies.router, prefix="/api")
+app.include_router(sources.router, prefix="/api")
 
 app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 

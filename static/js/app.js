@@ -96,15 +96,41 @@ const Views = {
 
   async home() {
     this._loading();
-    let cats, history;
+    let cats, history, syncStatus;
     try {
-      [cats, history] = await Promise.all([
+      [cats, history, syncStatus] = await Promise.all([
         API.get('/categories'),
         API.get('/jobs?job_type=move&status=done&limit=20'),
+        API.get('/sources/status').catch(() => null),
       ]);
     } catch (e) {
       this._setApp(`<div class="alert alert-danger mt-2">Failed to load: ${esc(e.message)}</div>`);
       return;
+    }
+
+    // ── Sync bar (shown only when rTorrent is configured) ──────────────────
+    let syncHtml = '';
+    if (syncStatus && syncStatus.rtorrent && syncStatus.rtorrent.configured) {
+      const rt = syncStatus.rtorrent;
+      syncHtml = `
+        <div class="d-flex align-items-center gap-3 mb-4 p-3 rounded border border-secondary"
+             style="background:rgba(255,255,255,.03)">
+          <i class="bi bi-cloud-download text-info fs-5"></i>
+          <div class="flex-grow-1">
+            <span class="fw-semibold small">Seedbox Sync</span>
+            <span class="text-secondary small ms-2">
+              tag: <code class="text-info">${esc(rt.tag)}</code>
+              &nbsp;·&nbsp; last ${esc(String(rt.lookback_hours))}h
+              &nbsp;·&nbsp; ${esc(rt.ssh_host)}
+            </span>
+          </div>
+          <button class="btn btn-sm btn-outline-info" onclick="Actions.sync()">
+            <i class="bi bi-arrow-repeat me-1"></i>Sync Now
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="Actions.previewSync()">
+            <i class="bi bi-eye me-1"></i>Preview
+          </button>
+        </div>`;
     }
 
     // ── Category grid ──────────────────────────────────────────────────────
@@ -169,7 +195,7 @@ const Views = {
         </div>`;
     }
 
-    this._setApp(catHtml + histHtml);
+    this._setApp(syncHtml + catHtml + histHtml);
   },
 
   async category(name) {
@@ -485,6 +511,60 @@ const Actions = {
       toast(`Could not start move: ${e.message}`, 'danger');
     }
   },
+
+  async sync() {
+    try {
+      const job = await API.post('/sources/sync', {});
+      JobPoller.track(job.id, { type: 'sync' });
+      JobsPanel.open();
+      toast(`Sync started — Job #${job.id}`, 'info');
+    } catch (e) {
+      toast(`Could not start sync: ${e.message}`, 'danger');
+    }
+  },
+
+  async previewSync() {
+    try {
+      const items = await API.get('/sources/preview');
+      if (!items.length) { toast('Nothing ready to import.', 'secondary'); return; }
+      const rows = items.map(it => `
+        <tr>
+          <td>${esc(it.name)}</td>
+          <td><span class="badge bg-secondary">${esc(it.suggested_type)}</span></td>
+          <td class="text-secondary small">${esc(it.label)}</td>
+          <td class="text-secondary small text-nowrap">${_humanSize(it.size_bytes)}</td>
+        </tr>`).join('');
+      const html = `
+        <div class="modal fade" id="preview-modal" tabindex="-1">
+          <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content bg-dark text-white border-secondary">
+              <div class="modal-header border-secondary py-2">
+                <h6 class="modal-title mb-0"><i class="bi bi-cloud-download me-2 text-info"></i>Ready to import (${items.length})</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body p-0">
+                <table class="table table-dark table-hover file-table mb-0">
+                  <thead class="text-secondary"><tr><th>Name</th><th>Type</th><th>Label</th><th>Size</th></tr></thead>
+                  <tbody>${rows}</tbody>
+                </table>
+              </div>
+              <div class="modal-footer border-secondary py-2">
+                <button class="btn btn-info btn-sm" onclick="Actions.sync(); bootstrap.Modal.getInstance(document.getElementById('preview-modal')).hide()">
+                  <i class="bi bi-arrow-repeat me-1"></i>Sync Now
+                </button>
+                <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+              </div>
+            </div>
+          </div>
+        </div>`;
+      document.getElementById('app').insertAdjacentHTML('beforeend', html);
+      const modal = new bootstrap.Modal(document.getElementById('preview-modal'));
+      document.getElementById('preview-modal').addEventListener('hidden.bs.modal', e => e.target.remove());
+      modal.show();
+    } catch (e) {
+      toast(`Preview failed: ${e.message}`, 'danger');
+    }
+  },
 };
 
 // ─────────────────────────────────────────────
@@ -657,6 +737,14 @@ function enc(str) { return encodeURIComponent(str); }
 
 function jsStr(str) {
   return `'${String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+function _humanSize(bytes) {
+  if (!bytes) return '—';
+  const units = ['B','KB','MB','GB','TB'];
+  let i = 0; let v = bytes;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 
 function breadcrumb(crumbs) {

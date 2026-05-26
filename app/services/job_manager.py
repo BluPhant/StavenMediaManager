@@ -39,6 +39,13 @@ def submit_move(job_id: int, source_path: str, formatted_name: str, category: st
     _executor.submit(_guarded, job_id, run_move, source_path, formatted_name, category)
 
 
+def submit_sync(job_id: int) -> None:
+    from ..services.syncer import run_sync
+
+    update_job(job_id, status="running", progress=0)
+    _executor.submit(_guarded, job_id, run_sync)
+
+
 def _guarded(job_id: int, func, *args) -> None:
     try:
         func(job_id, *args)
