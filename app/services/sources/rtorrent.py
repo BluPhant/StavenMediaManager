@@ -11,6 +11,7 @@ No secrets are stored in this file.
 import ftplib
 import logging
 import os
+import socket
 import xmlrpc.client
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urlunparse
@@ -88,6 +89,37 @@ class _TimeoutTransport(xmlrpc.client.SafeTransport):
         return conn
 
 
+# ── FTPS with large TCP buffers ───────────────────────────────────────────────
+# Python's default socket recv buffer (~87 KB) caps WAN throughput at roughly
+# buffer_size / RTT.  At 100 ms RTT that is ~0.87 MB/s regardless of link speed.
+# FileZilla explicitly sets large buffers; we do the same here.
+
+_SOCK_BUF = 16 * 1024 * 1024  # 16 MB — enough for RTTs up to ~500 ms at 250 Mbit
+
+
+class _FastFTP_TLS(ftplib.FTP_TLS):
+    """FTP_TLS that sets a large TCP receive buffer on both the control and
+    data sockets so throughput is not capped by the default kernel buffer."""
+
+    def connect(self, host="", port=0, timeout=-999, source_address=None):
+        result = super().connect(host, port, timeout, source_address)
+        try:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _SOCK_BUF)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, _SOCK_BUF)
+        except Exception:
+            pass
+        return result
+
+    def ntransfercmd(self, cmd, rest=None):
+        conn, size = super().ntransfercmd(cmd, rest)
+        try:
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _SOCK_BUF)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, _SOCK_BUF)
+        except Exception:
+            pass
+        return conn, size
+
+
 # ── FTPS helpers ──────────────────────────────────────────────────────────────
 
 def _ftp_root() -> str:
@@ -109,9 +141,9 @@ def _to_ftp_path(fs_path: str) -> str:
     return fs_path.lstrip("/")
 
 
-def _ftps_connect() -> ftplib.FTP_TLS:
-    """Open an authenticated FTPS connection."""
-    ftp = ftplib.FTP_TLS()
+def _ftps_connect() -> _FastFTP_TLS:
+    """Open an authenticated FTPS connection with large socket buffers."""
+    ftp = _FastFTP_TLS()
     ftp.connect(
         settings.rtorrent_ftp_host or settings.rtorrent_ssh_host,
         settings.rtorrent_ftp_port,
