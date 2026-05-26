@@ -110,7 +110,8 @@ def run_sync(job_id: int) -> None:
             update_job(job_id, progress=scaled, message=f"{_name} / {filename} {pct}%{speed_str}")
 
         try:
-            source.download(item, dest_dir, progress_cb=_progress)
+            source.download(item, dest_dir, progress_cb=_progress,
+                            cancel_check=lambda: job_manager.is_cancelled(job_id))
             source.mark_done(item)
             _record_synced(source_name, item.id, item.name)
             downloaded += 1

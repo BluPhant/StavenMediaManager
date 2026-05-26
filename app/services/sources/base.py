@@ -35,9 +35,11 @@ class BaseSource(ABC):
         ...
 
     @abstractmethod
-    def download(self, item: SourceItem, dest_dir: str, progress_cb=None) -> None:
+    def download(self, item: SourceItem, dest_dir: str, progress_cb=None,
+                 cancel_check=None) -> None:
         """Download item contents into dest_dir.
-        progress_cb(pct: int, msg: str) is called periodically if provided."""
+        progress_cb(pct, filename, mbps) is called periodically if provided.
+        cancel_check() — if provided and returns True, abort mid-stream."""
         ...
 
     @abstractmethod

@@ -123,8 +123,13 @@ def _ftps_connect() -> ftplib.FTP_TLS:
     return ftp
 
 
-def _download_one(ftp_path: str, local_path: str, progress_cb=None) -> None:
-    """Download a single file via a fresh FTPS connection."""
+def _download_one(ftp_path: str, local_path: str, progress_cb=None,
+                  cancel_check=None) -> None:
+    """Download a single file via a fresh FTPS connection.
+
+    cancel_check: optional callable — if it returns True, download is aborted
+    mid-stream by raising CancelledError from inside the retrbinary callback.
+    """
     import time
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
     ftp = _ftps_connect()
@@ -141,8 +146,13 @@ def _download_one(ftp_path: str, local_path: str, progress_cb=None) -> None:
 
         logger.info(f"FTPS ↓ START  {filename}  ({size_mb:.1f} MB)")
 
+        class _Cancelled(Exception):
+            pass
+
         with open(local_path, "wb") as f:
             def _cb(chunk: bytes) -> None:
+                if cancel_check and cancel_check():
+                    raise _Cancelled()
                 f.write(chunk)
                 transferred[0] += len(chunk)
                 now = time.monotonic()
@@ -162,7 +172,11 @@ def _download_one(ftp_path: str, local_path: str, progress_cb=None) -> None:
                     pct = int(transferred[0] / size * 100)
                     progress_cb(pct, filename, mbps)
 
-            ftp.retrbinary(f"RETR {ftp_path}", _cb, blocksize=262144)
+            try:
+                ftp.retrbinary(f"RETR {ftp_path}", _cb, blocksize=262144)
+            except _Cancelled:
+                logger.info(f"FTPS ↓ CANCEL {filename} (cancel requested mid-stream)")
+                raise InterruptedError("Download cancelled")
 
         elapsed = max(time.monotonic() - t_start, 0.001)
         avg_mbps = size_mb / elapsed
@@ -286,7 +300,8 @@ class RtorrentSource(BaseSource):
         """No-op — import state is tracked locally in synced_items."""
         pass
 
-    def download(self, item: SourceItem, dest_dir: str, progress_cb=None) -> None:
+    def download(self, item: SourceItem, dest_dir: str, progress_cb=None,
+                 cancel_check=None) -> None:
         """Download via FTPS using up to RTORRENT_FTP_THREADS parallel connections."""
         ftp_dir = _to_ftp_path(item.remote_path)
         is_multi = item.metadata.get("is_multi", False)
@@ -307,14 +322,14 @@ class RtorrentSource(BaseSource):
         total_files = len(transfers)
         completed = [0]
 
-        def _file_progress(pct: int, filename: str) -> None:
+        def _file_progress(pct: int, filename: str, mbps: float = 0.0) -> None:
             if progress_cb:
                 overall = int((completed[0] + pct / 100) / total_files * 100)
-                progress_cb(overall, filename)
+                progress_cb(overall, filename, mbps)
 
         def _download_task(args: tuple) -> None:
             ftp_path, local_path = args
-            _download_one(ftp_path, local_path, _file_progress)
+            _download_one(ftp_path, local_path, _file_progress, cancel_check=cancel_check)
             completed[0] += 1
 
         threads = min(settings.rtorrent_ftp_threads, total_files)
