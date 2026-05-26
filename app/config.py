@@ -39,6 +39,17 @@ class Settings(BaseSettings):
     rtorrent_ssh_key_path: str = ""
     rtorrent_ssh_pass: str = ""
 
+    # FTPS (FTP over TLS) — faster than SFTP, matches FileZilla defaults
+    # RTORRENT_FTP_HOST   FTP host, e.g. 216.163.184.165 or servername.usbx.me
+    # RTORRENT_FTP_PORT   default 21
+    # RTORRENT_FTP_ROOT   absolute path that is the FTP root on the server
+    #                     e.g. /home/emuhack  (paths below this become FTP-relative)
+    # RTORRENT_FTP_THREADS  parallel connections per torrent (default 4)
+    rtorrent_ftp_host: str = ""
+    rtorrent_ftp_port: int = 21
+    rtorrent_ftp_root: str = ""
+    rtorrent_ftp_threads: int = 4
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{os.path.join(self.config_dir, 'media_manager.db')}"

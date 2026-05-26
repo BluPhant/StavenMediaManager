@@ -194,6 +194,51 @@
     Required="false"
     Mask="false">/config/ssh/id_rsa</Config>
 
+  <!-- ── FTPS Download (replaces SFTP — faster, multi-threaded) ─────────────── -->
+  <Config
+    Name="Seedbox FTP Host"
+    Target="RTORRENT_FTP_HOST"
+    Default=""
+    Mode=""
+    Description="FTP host for seedbox downloads, e.g. 216.163.184.165 or servername.usbx.me. Uses FTPS (FTP over TLS) on port 21. Falls back to RTORRENT_SSH_HOST if blank."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
+    Name="Seedbox FTP Port"
+    Target="RTORRENT_FTP_PORT"
+    Default="21"
+    Mode=""
+    Description="FTPS port — default 21."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false">21</Config>
+
+  <Config
+    Name="Seedbox FTP Root"
+    Target="RTORRENT_FTP_ROOT"
+    Default=""
+    Mode=""
+    Description="Absolute path on the server that is the FTP root, e.g. /home/emuhack. Defaults to /home/{username} if blank."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
+    Name="Seedbox FTP Threads"
+    Target="RTORRENT_FTP_THREADS"
+    Default="4"
+    Mode=""
+    Description="Number of parallel FTPS connections per torrent download (default 4 — matches FileZilla multi-thread performance)."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false">4</Config>
+
   <Config
     Name="Plex URL"
     Target="PLEX_URL"
