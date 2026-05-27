@@ -424,11 +424,31 @@ class RtorrentSource(BaseSource):
             )
 
             completed = [0]
+            active_procs: list[subprocess.Popen] = []
+            active_procs_lock = threading.Lock()
 
             def _dl_one(ftp_path: str, local_path: str) -> None:
                 os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-                _curl_download_segment(ftp_path, local_path)
+                cmd = _curl_base() + ["--output", local_path, _ftp_url(ftp_path)]
+                p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                with active_procs_lock:
+                    active_procs.append(p)
+                _, stderr = p.communicate()
+                with active_procs_lock:
+                    if p in active_procs:
+                        active_procs.remove(p)
+                if p.returncode != 0:
+                    err = stderr.decode(errors="replace").strip()
+                    raise RuntimeError(f"curl failed ({p.returncode}): {err}")
                 completed[0] += 1
+
+            def _kill_all_procs():
+                with active_procs_lock:
+                    for p in list(active_procs):
+                        try:
+                            p.terminate()
+                        except Exception:
+                            pass
 
             # Background progress thread — same pattern as single-file path
             done_event = threading.Event()
@@ -447,9 +467,13 @@ class RtorrentSource(BaseSource):
                     }
                     for future in as_completed(futures):
                         if cancel_check and cancel_check():
+                            _kill_all_procs()
                             pool.shutdown(wait=False, cancel_futures=True)
                             raise InterruptedError("Download cancelled")
                         future.result()  # re-raises any exception
+            except InterruptedError:
+                _kill_all_procs()
+                raise
             finally:
                 done_event.set()
                 prog_thread.join(timeout=3)
