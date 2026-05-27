@@ -8,12 +8,12 @@ Compatible with usbx.me / Ultra.cc shared seedboxes:
 All credentials come from environment variables (see config.py).
 No secrets are stored in this file.
 """
-import ftplib
 import logging
 import os
-import socket
+import subprocess
+import threading
+import time
 import xmlrpc.client
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urlunparse
 
 from ...config import settings
@@ -89,41 +89,10 @@ class _TimeoutTransport(xmlrpc.client.SafeTransport):
         return conn
 
 
-# ── FTPS with large TCP buffers ───────────────────────────────────────────────
-# Python's default socket recv buffer (~87 KB) caps WAN throughput at roughly
-# buffer_size / RTT.  At 100 ms RTT that is ~0.87 MB/s regardless of link speed.
-# FileZilla explicitly sets large buffers; we do the same here.
-
-_SOCK_BUF = 16 * 1024 * 1024  # 16 MB — enough for RTTs up to ~500 ms at 250 Mbit
-
-
-class _FastFTP_TLS(ftplib.FTP_TLS):
-    """FTP_TLS that sets a large TCP receive buffer on both the control and
-    data sockets so throughput is not capped by the default kernel buffer."""
-
-    def connect(self, host="", port=0, timeout=-999, source_address=None):
-        result = super().connect(host, port, timeout, source_address)
-        try:
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _SOCK_BUF)
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, _SOCK_BUF)
-        except Exception:
-            pass
-        return result
-
-    def ntransfercmd(self, cmd, rest=None):
-        conn, size = super().ntransfercmd(cmd, rest)
-        try:
-            conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _SOCK_BUF)
-            conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, _SOCK_BUF)
-        except Exception:
-            pass
-        return conn, size
-
-
-# ── FTPS helpers ──────────────────────────────────────────────────────────────
+# ── Path helpers ──────────────────────────────────────────────────────────────
 
 def _ftp_root() -> str:
-    """FTP root path on the server — paths below this are FTP-relative."""
+    """Absolute filesystem path that maps to the FTP root on the server."""
     root = settings.rtorrent_ftp_root
     if not root:
         root = f"/home/{settings.rtorrent_user}"
@@ -131,139 +100,53 @@ def _ftp_root() -> str:
 
 
 def _to_ftp_path(fs_path: str) -> str:
-    """Convert absolute filesystem path to FTP-relative path."""
+    """Convert absolute filesystem path → FTP-absolute path (starts with /)."""
     root = _ftp_root()
     fs_path = fs_path.rstrip("/")
     if fs_path.startswith(root):
         rel = fs_path[len(root):]
-        return rel.lstrip("/") or "."
-    # Fallback: strip leading slash
-    return fs_path.lstrip("/")
+        return rel or "/"
+    return "/" + fs_path.lstrip("/")
 
 
-def _ftps_connect() -> _FastFTP_TLS:
-    """Open an authenticated FTPS connection with large socket buffers."""
-    ftp = _FastFTP_TLS()
-    ftp.connect(
-        settings.rtorrent_ftp_host or settings.rtorrent_ssh_host,
-        settings.rtorrent_ftp_port,
-        timeout=30,
-    )
-    ftp.login(settings.rtorrent_user, settings.rtorrent_pass)
-    ftp.prot_p()   # encrypt the data channel
-    ftp.set_pasv(True)
-    return ftp
+# ── lftp-based download ───────────────────────────────────────────────────────
+# Python's ftplib + ssl runs ~0.9 MB/s due to GIL + per-record Python overhead.
+# lftp is native C + OpenSSL — same stack as FileZilla — and matches its speed.
 
+def _lftp_script(remote_path: str, local_path: str, is_dir: bool) -> str:
+    """Build an lftp command script for a single torrent download."""
+    host = settings.rtorrent_ftp_host or settings.rtorrent_ssh_host
+    port = settings.rtorrent_ftp_port
+    user = settings.rtorrent_user
+    password = settings.rtorrent_pass
+    threads = settings.rtorrent_ftp_threads
 
-def _download_one(ftp_path: str, local_path: str, progress_cb=None,
-                  cancel_check=None) -> None:
-    """Download a single file via a fresh FTPS connection.
-
-    cancel_check: optional callable — if it returns True, download is aborted
-    mid-stream by raising CancelledError from inside the retrbinary callback.
-    """
-    import time
-    os.makedirs(os.path.dirname(local_path), exist_ok=True)
-    ftp = _ftps_connect()
-    try:
-        try:
-            size = ftp.size(ftp_path) or 1
-        except Exception:
-            size = 1
-        transferred = [0]
-        filename = os.path.basename(local_path)
-        size_mb = size / 1024 / 1024
-        t_start = time.monotonic()
-        last_log = [t_start]  # throttle log lines to once per 5 s
-
-        logger.info(f"FTPS ↓ START  {filename}  ({size_mb:.1f} MB)")
-
-        class _Cancelled(Exception):
-            pass
-
-        with open(local_path, "wb") as f:
-            def _cb(chunk: bytes) -> None:
-                if cancel_check and cancel_check():
-                    raise _Cancelled()
-                f.write(chunk)
-                transferred[0] += len(chunk)
-                now = time.monotonic()
-                elapsed = max(now - t_start, 0.001)
-                mbps = (transferred[0] / 1024 / 1024) / elapsed
-
-                if now - last_log[0] >= 5.0:
-                    pct = int(transferred[0] / size * 100)
-                    logger.info(
-                        f"FTPS ↓        {filename}  "
-                        f"{transferred[0]/1024/1024:.1f}/{size_mb:.1f} MB  "
-                        f"{pct}%  {mbps:.1f} MB/s"
-                    )
-                    last_log[0] = now
-
-                if progress_cb:
-                    pct = int(transferred[0] / size * 100)
-                    progress_cb(pct, filename, mbps)
-
-            try:
-                ftp.retrbinary(f"RETR {ftp_path}", _cb, blocksize=262144)
-            except _Cancelled:
-                logger.info(f"FTPS ↓ CANCEL {filename} (cancel requested mid-stream)")
-                raise InterruptedError("Download cancelled")
-
-        elapsed = max(time.monotonic() - t_start, 0.001)
-        avg_mbps = size_mb / elapsed
-        logger.info(
-            f"FTPS ↓ DONE   {filename}  "
-            f"{size_mb:.1f} MB in {elapsed:.1f}s  avg {avg_mbps:.1f} MB/s"
+    lines = [
+        "set ssl:verify-certificate no",
+        "set ftp:ssl-force yes",
+        "set ftp:passive-mode yes",
+        f"set net:max-retries 3",
+        f"set net:reconnect-interval-base 5",
+        f'open -u "{user}","{password}" ftps://{host}:{port}',
+    ]
+    if is_dir:
+        # mirror: parallel transfer of every file in the remote directory
+        lines.append(
+            f'mirror --parallel={threads} --no-perms --no-umask '
+            f'"{remote_path}" "{local_path}"'
         )
-    finally:
-        try:
-            ftp.quit()
-        except Exception:
-            pass
+    else:
+        # pget: parallel-segment download of a single large file
+        lines.append(f'pget -n {threads} "{remote_path}" -o "{local_path}"')
+    lines.append("quit")
+    return "\n".join(lines)
 
-
-def _list_ftp_files(ftp_dir: str) -> list[str]:
-    """Return all file paths (relative to ftp_dir) under an FTP directory."""
-    ftp = _ftps_connect()
-    results: list[str] = []
-    try:
-        _walk_ftp(ftp, ftp_dir, "", results)
-    finally:
-        try:
-            ftp.quit()
-        except Exception:
-            pass
-    return results
-
-
-def _walk_ftp(ftp: ftplib.FTP_TLS, base: str, rel: str, out: list[str]) -> None:
-    path = f"{base}/{rel}".rstrip("/") if rel else base
-    entries: list[str] = []
-    try:
-        ftp.retrlines(f"NLST {path}", entries.append)
-    except ftplib.error_perm:
-        return
-    for entry in entries:
-        name = entry.split("/")[-1]
-        child_rel = f"{rel}/{name}".lstrip("/") if rel else name
-        child_path = f"{base}/{child_rel}"
-        try:
-            # Try to list as directory
-            sub: list[str] = []
-            ftp.retrlines(f"NLST {child_path}/", sub.append)
-            if sub:
-                _walk_ftp(ftp, base, child_rel, out)
-                continue
-        except Exception:
-            pass
-        out.append(child_rel)
 
 
 # ── rTorrent source ───────────────────────────────────────────────────────────
 
 class RtorrentSource(BaseSource):
-    """Polls rTorrent via XMLRPC and downloads via FTPS (4 parallel connections)."""
+    """Polls rTorrent via XMLRPC; downloads via lftp (native FTPS, parallel segments)."""
 
     def is_configured(self) -> bool:
         return bool(
@@ -334,40 +217,90 @@ class RtorrentSource(BaseSource):
 
     def download(self, item: SourceItem, dest_dir: str, progress_cb=None,
                  cancel_check=None) -> None:
-        """Download via FTPS using up to RTORRENT_FTP_THREADS parallel connections."""
-        ftp_dir = _to_ftp_path(item.remote_path)
+        """Download via lftp (native FTPS, parallel) — matches FileZilla throughput."""
+        remote_path = _to_ftp_path(item.remote_path)
         is_multi = item.metadata.get("is_multi", False)
+        total_bytes = max(item.size_bytes, 1)
+        filename = item.name
 
-        if is_multi:
-            # Build (ftp_path, local_path) pairs from file list
-            file_list = item.metadata.get("files", [])
-            if not file_list:
-                file_list = _list_ftp_files(ftp_dir)
-            transfers = [
-                (f"{ftp_dir}/{f}".replace("//", "/"), os.path.join(dest_dir, f))
-                for f in file_list
-            ]
-        else:
-            filename = os.path.basename(item.remote_path)
-            transfers = [(ftp_dir, os.path.join(dest_dir, filename))]
+        os.makedirs(dest_dir, exist_ok=True)
 
-        total_files = len(transfers)
-        completed = [0]
+        script = _lftp_script(remote_path, dest_dir, is_dir=is_multi)
+        logger.info(
+            f"lftp download: {item.name}  remote={remote_path}  "
+            f"is_dir={is_multi}  size={total_bytes/1024/1024:.1f} MB"
+        )
 
-        def _file_progress(pct: int, filename: str, mbps: float = 0.0) -> None:
-            if progress_cb:
-                overall = int((completed[0] + pct / 100) / total_files * 100)
-                progress_cb(overall, filename, mbps)
+        proc = subprocess.Popen(
+            ["lftp"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        proc.stdin.write(script.encode())
+        proc.stdin.close()
 
-        def _download_task(args: tuple) -> None:
-            ftp_path, local_path = args
-            _download_one(ftp_path, local_path, _file_progress, cancel_check=cancel_check)
-            completed[0] += 1
+        t_start = time.monotonic()
+        last_log = [t_start]
+        last_size = [0]
+        last_size_t = [t_start]
 
-        threads = min(settings.rtorrent_ftp_threads, total_files)
-        logger.info(f"Downloading {item.name}: {total_files} file(s), {threads} thread(s)")
+        def _drain():
+            for line in proc.stdout:
+                txt = line.decode(errors="replace").strip()
+                if txt:
+                    logger.debug(f"lftp: {txt}")
 
-        with ThreadPoolExecutor(max_workers=threads) as pool:
-            futures = {pool.submit(_download_task, t): t for t in transfers}
-            for future in as_completed(futures):
-                future.result()  # re-raises any exception
+        drain_thread = threading.Thread(target=_drain, daemon=True)
+        drain_thread.start()
+
+        def _dir_bytes(path: str) -> int:
+            total = 0
+            try:
+                for root, _, files in os.walk(path):
+                    for f in files:
+                        try:
+                            total += os.path.getsize(os.path.join(root, f))
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+            return total
+
+        while proc.poll() is None:
+            if cancel_check and cancel_check():
+                proc.terminate()
+                raise InterruptedError("Download cancelled")
+
+            time.sleep(1.0)
+
+            now = time.monotonic()
+            if progress_cb and now - last_log[0] >= 2.0:
+                current = _dir_bytes(dest_dir)
+                dt = max(now - last_size_t[0], 0.001)
+                mbps = (current - last_size[0]) / 1024 / 1024 / dt
+                pct = min(int(current / total_bytes * 100), 99)
+                last_size[0] = current
+                last_size_t[0] = now
+                last_log[0] = now
+
+                elapsed = max(now - t_start, 0.001)
+                logger.info(
+                    f"lftp ↓  {filename}  "
+                    f"{current/1024/1024:.1f}/{total_bytes/1024/1024:.1f} MB  "
+                    f"{pct}%  {mbps:.1f} MB/s"
+                )
+                progress_cb(pct, filename, mbps)
+
+        drain_thread.join(timeout=3)
+        rc = proc.returncode
+        if rc != 0:
+            raise RuntimeError(f"lftp exited with code {rc} downloading {item.name}")
+
+        elapsed = max(time.monotonic() - t_start, 0.001)
+        avg_mbps = (total_bytes / 1024 / 1024) / elapsed
+        logger.info(
+            f"lftp ↓ DONE  {item.name}  avg {avg_mbps:.1f} MB/s  ({elapsed:.0f}s)"
+        )
+        if progress_cb:
+            progress_cb(100, filename, avg_mbps)
