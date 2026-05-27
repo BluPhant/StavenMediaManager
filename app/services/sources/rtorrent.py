@@ -23,6 +23,7 @@ No secrets are stored in this file.
 """
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -365,8 +366,7 @@ class RtorrentSource(BaseSource):
                     os.path.getsize(os.path.join(r, f))
                     for r, _, files in os.walk(dest_dir)
                     for f in files
-                    if not f.endswith(".part0") and not f.endswith(".part1")
-                    and not f.endswith(".part2") and not f.endswith(".part3")
+                    if not re.search(r"\.part\d+$", f)
                 )
             except OSError:
                 current = 0
@@ -429,18 +429,30 @@ class RtorrentSource(BaseSource):
                 os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
                 _curl_download_segment(ftp_path, local_path)
                 completed[0] += 1
-                _report_progress()
 
-            with ThreadPoolExecutor(max_workers=threads) as pool:
-                futures = {
-                    pool.submit(_dl_one, ftp, loc): (ftp, loc)
-                    for ftp, loc in transfers
-                }
-                for future in as_completed(futures):
-                    if cancel_check and cancel_check():
-                        pool.shutdown(wait=False, cancel_futures=True)
-                        raise InterruptedError("Download cancelled")
-                    future.result()  # re-raises any exception
+            # Background progress thread — same pattern as single-file path
+            done_event = threading.Event()
+
+            def _progress_loop():
+                while not done_event.wait(timeout=2.0):
+                    _report_progress()
+
+            prog_thread = threading.Thread(target=_progress_loop, daemon=True)
+            prog_thread.start()
+            try:
+                with ThreadPoolExecutor(max_workers=threads) as pool:
+                    futures = {
+                        pool.submit(_dl_one, ftp, loc): (ftp, loc)
+                        for ftp, loc in transfers
+                    }
+                    for future in as_completed(futures):
+                        if cancel_check and cancel_check():
+                            pool.shutdown(wait=False, cancel_futures=True)
+                            raise InterruptedError("Download cancelled")
+                        future.result()  # re-raises any exception
+            finally:
+                done_event.set()
+                prog_thread.join(timeout=3)
 
         elapsed = max(time.monotonic() - t_start, 0.001)
         avg_mbps = (total_bytes / 1024 / 1024) / elapsed
