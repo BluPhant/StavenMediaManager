@@ -127,8 +127,12 @@ const Views = {
             return `
               <div class="mb-2">
                 <div class="d-flex justify-content-between align-items-baseline mb-1">
-                  <span class="small text-truncate me-2" style="max-width:60%">${esc(t.name)}</span>
+                  <span class="small text-truncate me-2" style="max-width:55%">${esc(t.name)}</span>
                   <span class="text-secondary small text-nowrap">${done} / ${total} &nbsp; ${speed}</span>
+                  <button class="btn btn-sm btn-outline-danger ms-2 py-0 px-1" style="font-size:.7rem;line-height:1.4"
+                          onclick="Actions.stopTorrent('${esc(t.hash)}', this)" title="Stop torrent">
+                    <i class="bi bi-stop-fill"></i>
+                  </button>
                 </div>
                 <div class="progress" style="height:6px">
                   <div class="progress-bar ${barCls}" style="width:${pct}%" role="progressbar"></div>
@@ -597,6 +601,24 @@ const Actions = {
       modal.show();
     } catch (e) {
       toast(`Preview failed: ${e.message}`, 'danger');
+    }
+  },
+
+  async stopTorrent(hash, btn) {
+    if (!confirm('Stop this torrent on the seedbox?')) return;
+    btn.disabled = true;
+    try {
+      await API.post(`/sources/torrent/${encodeURIComponent(hash)}/stop`, {});
+      toast('Torrent stopped.', 'warning');
+      // Refresh the home page widget so the row updates
+      const row = btn.closest('.mb-2');
+      if (row) {
+        row.style.opacity = '0.4';
+        row.style.pointerEvents = 'none';
+      }
+    } catch (e) {
+      toast(`Stop failed: ${e.message}`, 'danger');
+      btn.disabled = false;
     }
   },
 };

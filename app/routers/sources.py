@@ -74,6 +74,19 @@ def active_torrents():
         raise HTTPException(status_code=502, detail=str(exc))
 
 
+@router.post("/torrent/{hash_}/stop", status_code=200)
+def stop_torrent(hash_: str):
+    """Stop (pause) a torrent on the seedbox by info-hash."""
+    rt = RtorrentSource()
+    if not rt.is_configured():
+        raise HTTPException(status_code=400, detail="rTorrent source not configured.")
+    try:
+        rt.stop_torrent(hash_)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return {"status": "stopped", "hash": hash_}
+
+
 @router.get("/preview")
 def preview_sync():
     """List torrents that would be imported on next sync (dry run — no download)."""

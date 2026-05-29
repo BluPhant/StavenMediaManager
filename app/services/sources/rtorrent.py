@@ -305,6 +305,15 @@ class RtorrentSource(BaseSource):
         except Exception as exc:
             raise RuntimeError(f"rTorrent load.raw_start failed: {exc}") from exc
 
+    def stop_torrent(self, hash_: str) -> None:
+        """Stop (pause) a torrent by hash via XMLRPC d.stop."""
+        proxy = self._proxy()
+        try:
+            proxy.d.stop(hash_)
+            logger.info(f"Stopped torrent {hash_}")
+        except Exception as exc:
+            raise RuntimeError(f"rTorrent d.stop failed: {exc}") from exc
+
     def list_active(self) -> list[dict]:
         """
         Return torrents that are currently in-progress on the seedbox
