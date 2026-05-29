@@ -50,6 +50,14 @@ class Settings(BaseSettings):
     rtorrent_ftp_root: str = ""
     rtorrent_ftp_threads: int = 4
 
+    # ── IPTorrents search (optional) ──────────────────────────────────────
+    # IPTORRENTS_USER_ID   numeric user ID shown on your profile page
+    # IPTORRENTS_PASSKEY   passkey / API key from your profile page
+    # IPTORRENTS_DOMAIN    override the domain (default: iptorrents.com)
+    iptorrents_user_id: str = ""
+    iptorrents_passkey: str = ""
+    iptorrents_domain: str = "iptorrents.com"
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{os.path.join(self.config_dir, 'media_manager.db')}"

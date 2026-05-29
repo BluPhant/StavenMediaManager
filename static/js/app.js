@@ -714,6 +714,144 @@ const JobPoller = {
 };
 
 // ─────────────────────────────────────────────
+// IPTorrents search view
+// ─────────────────────────────────────────────
+const IPTSearch = {
+  _lastQuery: '',
+  _lastCat: 'all',
+
+  async render() {
+    Views._setApp(`
+      <div class="d-flex align-items-center gap-2 mb-4">
+        <i class="bi bi-search text-info fs-5"></i>
+        <h5 class="mb-0">IPTorrents Search</h5>
+      </div>
+      <div class="row g-2 mb-3">
+        <div class="col-12 col-md-6">
+          <input type="text" id="ipt-query" class="form-control bg-dark text-white border-secondary"
+                 placeholder="Title to search…"
+                 value="${esc(this._lastQuery)}"
+                 onkeydown="if(event.key==='Enter') IPTSearch.search()">
+        </div>
+        <div class="col-auto">
+          <select id="ipt-cat" class="form-select bg-dark text-white border-secondary">
+            <option value="all"${this._lastCat==='all'?' selected':''}>All Categories</option>
+            <option value="movies"${this._lastCat==='movies'?' selected':''}>Movies</option>
+            <option value="tv"${this._lastCat==='tv'?' selected':''}>TV</option>
+            <option value="music"${this._lastCat==='music'?' selected':''}>Music</option>
+            <option value="audiobooks"${this._lastCat==='audiobooks'?' selected':''}>Audiobooks</option>
+            <option value="games"${this._lastCat==='games'?' selected':''}>Games</option>
+            <option value="ebooks"${this._lastCat==='ebooks'?' selected':''}>Ebooks</option>
+            <option value="software"${this._lastCat==='software'?' selected':''}>Software</option>
+          </select>
+        </div>
+        <div class="col-auto">
+          <button class="btn btn-info" onclick="IPTSearch.search()">
+            <i class="bi bi-search me-1"></i>Search
+          </button>
+        </div>
+      </div>
+      <div id="ipt-results"></div>`);
+
+    // Auto-search if we have a prior query
+    if (this._lastQuery) this.search();
+  },
+
+  async search() {
+    const q   = (document.getElementById('ipt-query')?.value || '').trim();
+    const cat = document.getElementById('ipt-cat')?.value || 'all';
+    this._lastQuery = q;
+    this._lastCat   = cat;
+
+    const el = document.getElementById('ipt-results');
+    if (!el) return;
+    el.innerHTML = `<div class="text-center py-4"><span class="spinner-border text-info spinner-border-sm me-2"></span>Searching IPTorrents…</div>`;
+
+    let results;
+    try {
+      results = await API.get(`/iptorrents/search?q=${enc(q)}&cat=${enc(cat)}&limit=50`);
+    } catch (e) {
+      el.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`;
+      return;
+    }
+
+    if (!results.length) {
+      el.innerHTML = `<div class="text-secondary text-center py-4">No results found${q ? ` for <strong>${esc(q)}</strong>` : ''}.</div>`;
+      return;
+    }
+
+    const rows = results.map(r => {
+      const size = _humanSize(r.size_bytes);
+      const seeds = r.seeders > 0
+        ? `<span class="text-success">${r.seeders}</span>`
+        : `<span class="text-secondary">—</span>`;
+      const peers = r.leechers > 0
+        ? `<span class="text-warning">${r.leechers}</span>`
+        : `<span class="text-secondary">—</span>`;
+      const typeIcon = _iptTypeIcon(r.suggested_type);
+      return `
+        <tr>
+          <td>
+            <div class="fw-semibold lh-sm">${esc(r.title)}</div>
+            <div class="text-secondary" style="font-size:.75rem">${esc(r.ipt_category)}${r.pubdate ? ' · ' + esc(_shortDate(r.pubdate)) : ''}</div>
+          </td>
+          <td class="text-nowrap text-secondary small">${size}</td>
+          <td class="text-nowrap small">${seeds} / ${peers}</td>
+          <td class="text-nowrap">
+            <span class="badge bg-secondary">${esc(r.suggested_type)}</span>
+          </td>
+          <td class="text-nowrap">
+            <button class="btn btn-sm btn-outline-info"
+                    onclick="IPTSearch.grab(${jsStr(r.torrent_url)}, ${jsStr(r.title)}, ${jsStr(r.suggested_type)})"
+                    title="Add to rTorrent seedbox">
+              <i class="bi bi-cloud-download me-1"></i>Grab
+            </button>
+          </td>
+        </tr>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div class="text-secondary small mb-2">${results.length} result${results.length !== 1 ? 's' : ''}</div>
+      <div class="table-responsive">
+        <table class="table table-dark table-hover file-table align-middle">
+          <thead class="text-secondary">
+            <tr>
+              <th>Title</th>
+              <th>Size</th>
+              <th title="Seeds / Peers">S/P</th>
+              <th>Type</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  },
+
+  async grab(torrentUrl, title, suggestedType) {
+    const label = window._iptTag || '';   // use default tag from status if known
+    toast(`Grabbing ${title.slice(0, 50)}…`, 'info');
+    try {
+      await API.post('/iptorrents/grab', { torrent_url: torrentUrl, label });
+      toast(`✓ Added to rTorrent — sync when ready to download`, 'success');
+    } catch (e) {
+      toast(`Grab failed: ${e.message}`, 'danger');
+    }
+  },
+};
+
+function _iptTypeIcon(type) {
+  const { icon, color } = categoryIcon(type);
+  return `<i class="bi ${icon} ${color}"></i>`;
+}
+
+function _shortDate(dateStr) {
+  try {
+    return new Date(dateStr).toLocaleDateString();
+  } catch (_) { return dateStr; }
+}
+
+// ─────────────────────────────────────────────
 // Hash router
 // ─────────────────────────────────────────────
 const Router = {
@@ -721,8 +859,14 @@ const Router = {
     const hash = (location.hash || '#/').slice(1);
     const parts = hash.split('/').filter(Boolean);
 
-    if (!parts.length || parts[0] !== 'category') {
+    // highlight active nav link
+    document.getElementById('nav-search-link')?.classList.toggle(
+      'text-info', parts[0] === 'search');
+
+    if (!parts.length || (parts[0] !== 'category' && parts[0] !== 'search')) {
       await Views.home();
+    } else if (parts[0] === 'search') {
+      await IPTSearch.render();
     } else if (parts.length === 2) {
       await Views.category(decodeURIComponent(parts[1]));
     } else if (parts.length >= 3) {
@@ -787,8 +931,14 @@ function toast(msg, type = 'info') {
 // Boot
 // ─────────────────────────────────────────────
 window.addEventListener('hashchange', () => Router.route());
-window.addEventListener('load', () => {
+window.addEventListener('load', async () => {
   Router.route();
   JobsPanel.refresh();
   JobPoller.init();
+  // Pre-fetch IPT status so grab() knows the configured sync tag
+  try {
+    const st = await API.get('/iptorrents/status');
+    window._iptTag = (st.rtorrent?.configured) ? '' : '';
+    // tag is baked into rtorrent config; leave blank to use server default
+  } catch (_) {}
 });

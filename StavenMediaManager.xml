@@ -239,6 +239,40 @@
     Required="false"
     Mask="false">4</Config>
 
+  <!-- ── IPTorrents Search (optional) ───────────────────────────────────── -->
+  <Config
+    Name="IPTorrents User ID"
+    Target="IPTORRENTS_USER_ID"
+    Default=""
+    Mode=""
+    Description="Your numeric IPTorrents user ID — shown on your profile page. Required to use the Search feature."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false"></Config>
+
+  <Config
+    Name="IPTorrents Passkey"
+    Target="IPTORRENTS_PASSKEY"
+    Default=""
+    Mode=""
+    Description="Your IPTorrents passkey / RSS API key — found on your profile page under RSS."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="true"></Config>
+
+  <Config
+    Name="IPTorrents Domain"
+    Target="IPTORRENTS_DOMAIN"
+    Default="iptorrents.com"
+    Mode=""
+    Description="IPTorrents domain — override if using a mirror. Default: iptorrents.com"
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="false">iptorrents.com</Config>
+
   <Config
     Name="Plex URL"
     Target="PLEX_URL"

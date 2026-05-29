@@ -287,6 +287,24 @@ class RtorrentSource(BaseSource):
             url = urlunparse(parsed._replace(netloc=auth_netloc))
         return xmlrpc.client.ServerProxy(url, transport=_TimeoutTransport(timeout=30))
 
+    def load_torrent(self, torrent_bytes: bytes, label: str = "") -> None:
+        """
+        Load a .torrent file into rTorrent via XMLRPC load.raw_start.
+        Sets the ruTorrent label (d.custom1) to `label` if provided.
+        Raises RuntimeError on failure.
+        """
+        proxy = self._proxy()
+        binary = xmlrpc.client.Binary(torrent_bytes)
+        tag = label or settings.rtorrent_tag
+
+        try:
+            # load.raw_start: load + immediately start the torrent.
+            # Extra positional args are rTorrent commands run at load time.
+            proxy.load.raw_start("", binary, f"d.custom1.set={tag}")
+            logger.info(f"Loaded torrent into rTorrent with label={tag!r}")
+        except Exception as exc:
+            raise RuntimeError(f"rTorrent load.raw_start failed: {exc}") from exc
+
     def list_ready(self) -> list[SourceItem]:
         proxy = self._proxy()
         tag = settings.rtorrent_tag.lower()
