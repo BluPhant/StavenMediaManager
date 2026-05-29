@@ -62,6 +62,18 @@ def trigger_sync(db: Session = Depends(get_db)):
     return job
 
 
+@router.get("/active")
+def active_torrents():
+    """Return torrents currently in-progress on the seedbox (tagged, not yet complete)."""
+    rt = RtorrentSource()
+    if not rt.is_configured():
+        raise HTTPException(status_code=400, detail="rTorrent source not configured.")
+    try:
+        return rt.list_active()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
 @router.get("/preview")
 def preview_sync():
     """List torrents that would be imported on next sync (dry run — no download)."""

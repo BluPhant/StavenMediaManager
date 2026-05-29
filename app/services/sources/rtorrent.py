@@ -305,6 +305,53 @@ class RtorrentSource(BaseSource):
         except Exception as exc:
             raise RuntimeError(f"rTorrent load.raw_start failed: {exc}") from exc
 
+    def list_active(self) -> list[dict]:
+        """
+        Return torrents that are currently in-progress on the seedbox
+        (tagged with RTORRENT_TAG but not yet complete).
+        Each dict has: hash, name, label, size_bytes, bytes_done, pct,
+                       down_rate (bytes/s), up_rate (bytes/s), is_active.
+        """
+        proxy = self._proxy()
+        tag = settings.rtorrent_tag.lower()
+        try:
+            rows = proxy.d.multicall2(
+                "", "main",
+                "d.name=",
+                "d.custom1=",
+                "d.hash=",
+                "d.complete=",
+                "d.size_bytes=",
+                "d.bytes_done=",
+                "d.down.rate=",
+                "d.up.rate=",
+                "d.is_active=",
+            )
+        except Exception as exc:
+            raise RuntimeError(f"rTorrent XMLRPC error: {exc}") from exc
+
+        active = []
+        for name, label, hash_, complete, size, done, down_rate, up_rate, is_active in rows:
+            if complete:
+                continue
+            if tag and label.lower().strip() != tag:
+                continue
+            size = int(size) or 1
+            done = int(done)
+            pct = round(done / size * 100, 1)
+            active.append({
+                "hash":       hash_,
+                "name":       name,
+                "label":      label,
+                "size_bytes": size,
+                "bytes_done": done,
+                "pct":        pct,
+                "down_rate":  int(down_rate),
+                "up_rate":    int(up_rate),
+                "is_active":  bool(is_active),
+            })
+        return active
+
     def list_ready(self, exclude_ids: set | None = None) -> list[SourceItem]:
         proxy = self._proxy()
         tag = settings.rtorrent_tag.lower()

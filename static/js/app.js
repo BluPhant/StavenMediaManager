@@ -108,12 +108,46 @@ const Views = {
       return;
     }
 
-    // ── Sync bar (shown only when rTorrent is configured) ──────────────────
+    // ── Sync bar + active torrents (shown only when rTorrent is configured) ──
     let syncHtml = '';
     if (syncStatus && syncStatus.rtorrent && syncStatus.rtorrent.configured) {
       const rt = syncStatus.rtorrent;
+
+      // Fetch active (in-progress) torrents from seedbox
+      let activeHtml = '';
+      try {
+        const active = await API.get('/sources/active');
+        if (active.length) {
+          const rows = active.map(t => {
+            const pct    = t.pct;
+            const done   = _humanSize(t.bytes_done);
+            const total  = _humanSize(t.size_bytes);
+            const speed  = t.down_rate > 0 ? `<span class="text-success small">${_humanSize(t.down_rate)}/s</span>` : '';
+            const barCls = t.is_active ? 'bg-info progress-bar-animated progress-bar-striped' : 'bg-secondary';
+            return `
+              <div class="mb-2">
+                <div class="d-flex justify-content-between align-items-baseline mb-1">
+                  <span class="small text-truncate me-2" style="max-width:60%">${esc(t.name)}</span>
+                  <span class="text-secondary small text-nowrap">${done} / ${total} &nbsp; ${speed}</span>
+                </div>
+                <div class="progress" style="height:6px">
+                  <div class="progress-bar ${barCls}" style="width:${pct}%" role="progressbar"></div>
+                </div>
+              </div>`;
+          }).join('');
+
+          activeHtml = `
+            <div class="mb-3 p-3 rounded border border-secondary" style="background:rgba(255,255,255,.02)">
+              <div class="text-secondary small mb-2 text-uppercase fw-semibold" style="letter-spacing:.06em">
+                <i class="bi bi-arrow-down-circle me-1 text-info"></i>Seedbox Downloading (${active.length})
+              </div>
+              ${rows}
+            </div>`;
+        }
+      } catch (_) {}
+
       syncHtml = `
-        <div class="d-flex align-items-center gap-3 mb-4 p-3 rounded border border-secondary"
+        <div class="d-flex align-items-center gap-3 mb-3 p-3 rounded border border-secondary"
              style="background:rgba(255,255,255,.03)">
           <i class="bi bi-cloud-download text-info fs-5"></i>
           <div class="flex-grow-1">
@@ -129,7 +163,8 @@ const Views = {
           <button class="btn btn-sm btn-outline-secondary" onclick="Actions.previewSync()">
             <i class="bi bi-eye me-1"></i>Preview
           </button>
-        </div>`;
+        </div>
+        ${activeHtml}`;
     }
 
     // ── Category grid ──────────────────────────────────────────────────────
