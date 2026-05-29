@@ -61,35 +61,43 @@ def _guess_type_from_ipt_category(cat_str: str) -> str:
 
 # ── Query parser ─────────────────────────────────────────────────────────────
 
-# Tokens that signal "end of title, start of release metadata"
-_RELEASE_TOKENS = re.compile(
+# Year: a 4-digit number in the range 1900–2099
+_YEAR_RE = re.compile(r"^(19\d{2}|20[0-2]\d)$")
+
+# Known release-metadata tokens (case-insensitive explicit list — no catch-all)
+_KNOWN_RELEASE_RE = re.compile(
     r"^("
-    r"\d{3,4}[pP]"           # resolution: 720p 1080p 2160p
-    r"|4[Kk]"                 # 4K
-    r"|UHD|HDR|SDR|DV|IMAX"
-    r"|WEB[-.]?DL|WEBRip|WEBDL|AMZN|NF|DSNP|HULU|PCOK|ATVP|PMTP"
-    r"|BluRay|BDRip|BRRip|Blu-Ray|REMUX"
+    r"\d{3,4}[pP]"                          # 720p 1080p 2160p
+    r"|4[Kk]|UHD"                            # 4K UHD
+    r"|HDR10?\+?|SDR|DV|IMAX|DOLBY"
+    r"|WEB[-.]?DL|WEBRip|WEBDL"
+    r"|AMZN|NF|DSNP|HULU|PCOK|ATVP|PMTP|MAX|SHO|TUBI"
+    r"|BluRay|BDRip|BRRip|Blu[-.]Ray|REMUX"
     r"|DVDRip|DVDSCR|HDTV|PDTV"
-    r"|x264|x265|H\.?264|H\.?265|HEVC|AVC"
-    r"|AAC|DDP?5?\.?1?|DTS|FLAC|TrueHD|Atmos|DD[25]"
+    r"|x26[45]|H\.?26[45]|HEVC|AVC"
+    r"|AAC|DDP?5?\.?[01]?|DTS[-A-Z]*|FLAC|TrueHD|Atmos|DD[25]"
     r"|PROPER|REPACK|RERIP|INTERNAL|LIMITED|EXTENDED|UNRATED|DIRECTORS"
-    r"|SUBBED|DUBBED|MULTI|FRENCH|GERMAN|SPANISH|ITALIAN"
-    r"|[A-Z0-9]{2,10}"       # all-caps token (likely release group)
+    r"|SUBBED|DUBBED|MULTI|FRENCH|GERMAN|SPANISH|ITALIAN|HINDI"
+    r"|S\d{2}E?\d*|E\d{2}"                  # season/episode markers S01 S01E02 E03
     r")$",
     re.IGNORECASE,
 )
 
-# Year: a 4-digit number in the range 1900–2099
-_YEAR_RE = re.compile(r"^(19\d{2}|20[0-2]\d)$")
+
+def _is_release_group(tok: str) -> bool:
+    """True if the token looks like an all-caps release group name (e.g. BYNDR, LAMA)."""
+    # Must be fully uppercase letters/digits, at least 2 chars, no lowercase
+    return bool(re.match(r"^[A-Z0-9]{2,12}$", tok)) and tok == tok.upper()
 
 
 def parse_query(q: str) -> dict:
     """
     Split a freeform torrent search string into (title, year, extras).
 
-    'Brazil 1944 LAMA'      → title='Brazil',    year=None, extras=['1944','LAMA']
-    'Hoppers 2026 2160p WEB'→ title='Hoppers',   year='2026', extras=['2160p','WEB']
-    'The Bear S03'           → title='The Bear S03', year=None, extras=[]
+    'Brazil 1944 LAMA'               → title='Brazil',          year='1944', extras=['1944','LAMA']
+    'Hoppers 2026 2160p WEB-DL BYNDR'→ title='Hoppers',         year='2026', extras=[...]
+    'The Bear S03E01'                 → title='The Bear',        year=None,   extras=['S03E01']
+    'A Love Like This 2026 1080p'     → title='A Love Like This',year='2026', extras=[...]
     """
     tokens = q.strip().split()
     year = None
@@ -102,11 +110,18 @@ def parse_query(q: str) -> dict:
             year = tok
             past_title = True
             extra_tokens.append(tok)
-        elif past_title or _RELEASE_TOKENS.match(tok):
+        elif _KNOWN_RELEASE_RE.match(tok):
+            # Known codec/resolution/service/episode tag — always signals metadata
             past_title = True
             extra_tokens.append(tok)
-        else:
+        elif past_title and _is_release_group(tok):
+            # All-caps token AFTER we've already passed the title section
+            extra_tokens.append(tok)
+        elif not past_title:
             title_tokens.append(tok)
+        else:
+            # Past title but not a known release token — still treat as extra
+            extra_tokens.append(tok)
 
     return {
         "title":  " ".join(title_tokens),
