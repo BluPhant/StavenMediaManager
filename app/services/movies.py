@@ -30,7 +30,8 @@ def clean_for_search(raw: str) -> tuple[str, int | None]:
     name = re.sub(r"\s*-\s*", " ", name)
     name = re.sub(r"\[[^\]]*\]", " ", name)  # strip [tag] blocks
 
-    year_m = re.search(r"\b(19[5-9]\d|20[0-3]\d)\b", name)
+    # Match any plausible media year: 1900-2099
+    year_m = re.search(r"\b(19\d{2}|20[0-2]\d)\b", name)
     year = int(year_m.group(1)) if year_m else None
 
     name = _RELEASE_TAGS.sub(" ", name)
@@ -43,7 +44,7 @@ def clean_for_search(raw: str) -> tuple[str, int | None]:
 
 def _is_tag_word(word: str) -> bool:
     """True for words that look like scene release tags: all-caps or mostly uppercase."""
-    if len(word) < 3:
+    if len(word) < 2:
         return False
     upper = sum(1 for c in word if c.isupper())
     return upper / len(word) > 0.6
@@ -51,7 +52,7 @@ def _is_tag_word(word: str) -> bool:
 
 def _search_candidates(query: str) -> list[str]:
     """Return query variants: original first, then with tag-like words stripped
-    right-to-left, stopping before the query drops below 2 words."""
+    right-to-left down to a single word."""
     words = query.split()
     tag_indices = sorted(
         [i for i, w in enumerate(words) if _is_tag_word(w)],
@@ -61,16 +62,32 @@ def _search_candidates(query: str) -> list[str]:
     current = list(words)
     for idx in tag_indices:
         current.pop(idx)
-        if len(current) >= 2:
+        if current:
             candidates.append(" ".join(current))
     return candidates
 
 
 def search_tmdb(query: str, year: int | None, api_key: str) -> list[dict]:
-    for candidate in _search_candidates(query):
+    """
+    Search TMDb with progressive query broadening.
+    If the year-filtered search finds nothing, retry the same cascade without
+    the year constraint so older/misdated titles still surface.
+    """
+    candidates = _search_candidates(query)
+
+    # Pass 1: with year filter (most precise)
+    for candidate in candidates:
         results = _tmdb_search(candidate, year, api_key)
         if results:
             return results
+
+    # Pass 2: without year (catches pre-1950 films and mislabelled years)
+    if year is not None:
+        for candidate in candidates:
+            results = _tmdb_search(candidate, None, api_key)
+            if results:
+                return results
+
     return []
 
 
