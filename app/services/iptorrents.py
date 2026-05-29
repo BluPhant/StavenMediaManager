@@ -249,7 +249,9 @@ class IPTorrentsClient:
         items = channel.findall("item")
         results: list[IPTResult] = []
 
-        for item in items[:limit]:
+        # Parse all items first — we filter by title below, so cutting at
+        # `limit` before filtering could drop genuine matches.
+        for item in items:
             try:
                 result = self._parse_item(item)
                 if result:
@@ -258,8 +260,14 @@ class IPTorrentsClient:
                 logger.debug(f"IPT RSS item parse error: {exc}")
                 continue
 
-        logger.info(f"IPT search returned {len(results)} results")
-        return results
+        # IPT's q= parameter searches description text as well as titles, so
+        # we apply a client-side title filter to strip false positives.
+        if query:
+            words = [w.lower() for w in query.split() if w]
+            results = [r for r in results if _title_matches(r.title, words)]
+
+        logger.info(f"IPT search returned {len(results)} results (after title filter)")
+        return results[:limit]
 
     def _parse_item(self, item: ET.Element) -> IPTResult | None:
         # ── Title ────────────────────────────────────────────────────────────
@@ -406,6 +414,12 @@ def _parse_int_from_text(text: str, pattern: str) -> int:
         return int(m.group(1)) if m else 0
     except (ValueError, AttributeError):
         return 0
+
+
+def _title_matches(title: str, words: list[str]) -> bool:
+    """Return True if every word in *words* appears in *title* (case-insensitive)."""
+    tl = title.lower()
+    return all(w in tl for w in words)
 
 
 def _parse_size_from_text(text: str) -> int:
