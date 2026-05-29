@@ -7,6 +7,7 @@ Skips any item whose hash is already recorded in synced_items.
 """
 import logging
 import os
+import time
 from datetime import datetime
 
 from ..config import settings
@@ -27,13 +28,12 @@ def _get_sources():
     return sources
 
 
-def _already_synced(source: str, item_id: str) -> bool:
+def _get_synced_ids(source: str) -> set[str]:
+    """Return all item IDs already recorded for this source in a single DB query."""
     db = SessionLocal()
     try:
-        return db.query(SyncedItem).filter(
-            SyncedItem.source == source,
-            SyncedItem.item_id == item_id,
-        ).first() is not None
+        rows = db.query(SyncedItem.item_id).filter(SyncedItem.source == source).all()
+        return {r.item_id for r in rows}
     finally:
         db.close()
 
@@ -64,14 +64,19 @@ def run_sync(job_id: int) -> None:
     all_items = []
     for source_name, source in sources:
         try:
-            items = source.list_ready()
-            new_items = [it for it in items if not _already_synced(source_name, it.id)]
-            skipped = len(items) - len(new_items)
+            # Single DB query for all synced IDs — passed to list_ready() so it
+            # can skip per-item XMLRPC calls for already-known torrents.
+            t0 = time.monotonic()
+            synced_ids = _get_synced_ids(source_name)
             logger.info(
-                f"{source.__class__.__name__}: {len(items)} tagged, "
-                f"{skipped} already imported, {len(new_items)} new"
+                f"{source.__class__.__name__}: {len(synced_ids)} synced IDs "
+                f"loaded from DB in {time.monotonic() - t0:.3f}s"
             )
-            all_items.extend((source_name, source, it) for it in new_items)
+
+            update_job(job_id, progress=3, message=f"Polling {source_name} ({len(synced_ids)} already synced)…")
+            items = source.list_ready(exclude_ids=synced_ids)
+            logger.info(f"{source.__class__.__name__}: {len(items)} new item(s) to import")
+            all_items.extend((source_name, source, it) for it in items)
         except Exception as exc:
             update_job(job_id, status="error", message=f"Failed to list items: {exc}")
             return

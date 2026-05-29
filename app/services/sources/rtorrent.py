@@ -305,10 +305,13 @@ class RtorrentSource(BaseSource):
         except Exception as exc:
             raise RuntimeError(f"rTorrent load.raw_start failed: {exc}") from exc
 
-    def list_ready(self) -> list[SourceItem]:
+    def list_ready(self, exclude_ids: set | None = None) -> list[SourceItem]:
         proxy = self._proxy()
         tag = settings.rtorrent_tag.lower()
+        exclude_ids = exclude_ids or set()
+
         logger.info(f"Connecting to rTorrent XMLRPC: {settings.rtorrent_url}")
+        t0 = time.monotonic()
         try:
             rows = proxy.d.multicall2(
                 "", "main",
@@ -320,25 +323,42 @@ class RtorrentSource(BaseSource):
                 "d.size_bytes=",
                 "d.is_multi_file=",
             )
-            logger.info(f"rTorrent: {len(rows)} total, filtering by tag='{tag}'")
         except Exception as exc:
             logger.error(f"rTorrent XMLRPC failed: {exc}")
             raise RuntimeError(f"rTorrent XMLRPC error: {exc}") from exc
 
+        t_bulk = time.monotonic() - t0
+        logger.info(
+            f"rTorrent d.multicall2: {len(rows)} total torrents in {t_bulk:.2f}s, "
+            f"filtering by tag='{tag}', {len(exclude_ids)} already-synced IDs to skip"
+        )
+
         items: list[SourceItem] = []
+        skipped = 0
+        file_calls = 0
+        t_file_calls = 0.0
+
         for name, label, directory, hash_, complete, size, is_multi in rows:
             if not complete:
                 continue
             if tag and label.lower().strip() != tag:
                 continue
 
+            # Skip expensive f.multicall for items we already have in the DB
+            if hash_ in exclude_ids:
+                skipped += 1
+                continue
+
             remote_path = directory if is_multi else os.path.join(directory, name)
 
+            t_f = time.monotonic()
             try:
                 file_rows = proxy.f.multicall(hash_, "", "f.path=")
                 file_list = [r[0] for r in file_rows]
             except Exception:
                 file_list = [name]
+            t_file_calls += time.monotonic() - t_f
+            file_calls += 1
 
             items.append(SourceItem(
                 id=hash_,
@@ -349,6 +369,11 @@ class RtorrentSource(BaseSource):
                 metadata={"label": label, "files": file_list, "is_multi": bool(is_multi)},
             ))
 
+        logger.info(
+            f"list_ready: {len(items)} new item(s), {skipped} skipped (already synced), "
+            f"{file_calls} f.multicall(s) in {t_file_calls:.2f}s  "
+            f"[total {time.monotonic() - t0:.2f}s]"
+        )
         return items
 
     def mark_done(self, item: SourceItem) -> None:

@@ -30,8 +30,10 @@ class BaseSource(ABC):
         ...
 
     @abstractmethod
-    def list_ready(self) -> list[SourceItem]:
-        """Return items that are ready to download (tagged, complete, within lookback)."""
+    def list_ready(self, exclude_ids: set | None = None) -> list[SourceItem]:
+        """Return items that are ready to download (tagged, complete, within lookback).
+        exclude_ids — hashes already recorded as synced; sources should skip expensive
+                      per-item metadata fetches (e.g. XMLRPC file-list calls) for these."""
         ...
 
     @abstractmethod
