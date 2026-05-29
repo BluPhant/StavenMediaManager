@@ -39,6 +39,11 @@ def clean_for_search(raw: str) -> tuple[str, int | None]:
         name = name.replace(str(year), "")
     name = re.sub(r"[()]", "", name)
     name = re.sub(r"\s+", " ", name).strip()
+
+    # Strip trailing all-caps tokens that look like release groups (e.g. LAMA, YIFY)
+    # These survive the release-tag regex but shouldn't appear in the search suggestion.
+    name = re.sub(r"(?:^|\s+)[A-Z]{2,12}$", "", name).strip()
+
     return name, year
 
 
