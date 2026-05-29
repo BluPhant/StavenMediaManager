@@ -10,6 +10,7 @@ Credentials (all via environment variables):
 
 No credentials are stored in this file.
 """
+import gzip
 import logging
 import re
 import urllib.parse
@@ -104,6 +105,9 @@ class IPTorrentsClient:
         req = urllib.request.Request(url, headers={"User-Agent": "StavenMediaManager/1.0"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = resp.read()
+        # IPTorrents sends gzip-compressed responses
+        if data[:2] == b'\x1f\x8b':
+            data = gzip.decompress(data)
         return ET.fromstring(data)
 
     def search(self, query: str = "", category: str = "all",
