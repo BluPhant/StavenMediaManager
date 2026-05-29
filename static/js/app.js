@@ -800,34 +800,56 @@ const IPTSearch = {
 
     const el = document.getElementById('ipt-results');
     if (!el) return;
-    el.innerHTML = `<div class="text-center py-4"><span class="spinner-border text-info spinner-border-sm me-2"></span>Searching IPTorrents…</div>`;
+    el.innerHTML = `<div class="text-center py-4"><span class="spinner-border text-info spinner-border-sm me-2"></span>Searching…</div>`;
 
-    let results;
+    let data;
     try {
-      results = await API.get(`/iptorrents/search?q=${enc(q)}&cat=${enc(cat)}&limit=50`);
+      data = await API.get(`/iptorrents/smart-search?q=${enc(q)}&cat=${enc(cat)}&limit=50`);
     } catch (e) {
       el.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`;
       return;
     }
 
+    const { results, query_used, year, attempts } = data;
+
+    // ── Fallback / cascade info bar ──────────────────────────────────────────
+    let infoHtml = '';
+    if (attempts.length > 1 && query_used) {
+      const tried = attempts.slice(0, -1).map(a => `<code>${esc(a)}</code>`).join(' → ');
+      infoHtml = `
+        <div class="alert alert-secondary py-2 small mb-3" style="border-color:#444">
+          <i class="bi bi-funnel me-1 text-info"></i>
+          No results for ${tried} — showing results for <strong>${esc(query_used)}</strong>
+          ${year ? `<span class="ms-2 badge bg-secondary">year: ${esc(year)}</span>` : ''}
+        </div>`;
+    } else if (query_used && year) {
+      infoHtml = `<div class="text-secondary small mb-2">
+        <i class="bi bi-calendar3 me-1"></i>Detected year: <span class="badge bg-secondary">${esc(year)}</span>
+        — year-matching results sorted first
+      </div>`;
+    }
+
     if (!results.length) {
-      el.innerHTML = `<div class="text-secondary text-center py-4">No results found${q ? ` for <strong>${esc(q)}</strong>` : ''}.</div>`;
+      const allTried = attempts.map(a => `<code>${esc(a)}</code>`).join(', ');
+      el.innerHTML = infoHtml + `
+        <div class="text-secondary text-center py-4">
+          No results found after trying: ${allTried}
+        </div>`;
       return;
     }
 
     const rows = results.map(r => {
-      const size = _humanSize(r.size_bytes);
-      const seeds = r.seeders > 0
-        ? `<span class="text-success">${r.seeders}</span>`
-        : `<span class="text-secondary">—</span>`;
-      const peers = r.leechers > 0
-        ? `<span class="text-warning">${r.leechers}</span>`
-        : `<span class="text-secondary">—</span>`;
-      const typeIcon = _iptTypeIcon(r.suggested_type);
+      const size  = _humanSize(r.size_bytes);
+      const seeds = r.seeders  > 0 ? `<span class="text-success">${r.seeders}</span>`  : `<span class="text-secondary">—</span>`;
+      const peers = r.leechers > 0 ? `<span class="text-warning">${r.leechers}</span>` : `<span class="text-secondary">—</span>`;
+      // Highlight year in title if detected
+      const titleHtml = year
+        ? esc(r.title).replace(new RegExp(`(${esc(year)})`, 'g'), '<mark class="bg-transparent text-warning fw-bold">$1</mark>')
+        : esc(r.title);
       return `
         <tr>
           <td>
-            <div class="fw-semibold lh-sm">${esc(r.title)}</div>
+            <div class="fw-semibold lh-sm">${titleHtml}</div>
             <div class="text-secondary" style="font-size:.75rem">${esc(r.ipt_category)}${r.pubdate ? ' · ' + esc(_shortDate(r.pubdate)) : ''}</div>
           </td>
           <td class="text-nowrap text-secondary small">${size}</td>
@@ -845,18 +867,12 @@ const IPTSearch = {
         </tr>`;
     }).join('');
 
-    el.innerHTML = `
+    el.innerHTML = infoHtml + `
       <div class="text-secondary small mb-2">${results.length} result${results.length !== 1 ? 's' : ''}</div>
       <div class="table-responsive">
         <table class="table table-dark table-hover file-table align-middle">
           <thead class="text-secondary">
-            <tr>
-              <th>Title</th>
-              <th>Size</th>
-              <th title="Seeds / Peers">S/P</th>
-              <th>Type</th>
-              <th></th>
-            </tr>
+            <tr><th>Title</th><th>Size</th><th title="Seeds / Peers">S/P</th><th>Type</th><th></th></tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>

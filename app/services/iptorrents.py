@@ -59,6 +59,103 @@ def _guess_type_from_ipt_category(cat_str: str) -> str:
     return "_unsorted"
 
 
+# ── Query parser ─────────────────────────────────────────────────────────────
+
+# Tokens that signal "end of title, start of release metadata"
+_RELEASE_TOKENS = re.compile(
+    r"^("
+    r"\d{3,4}[pP]"           # resolution: 720p 1080p 2160p
+    r"|4[Kk]"                 # 4K
+    r"|UHD|HDR|SDR|DV|IMAX"
+    r"|WEB[-.]?DL|WEBRip|WEBDL|AMZN|NF|DSNP|HULU|PCOK|ATVP|PMTP"
+    r"|BluRay|BDRip|BRRip|Blu-Ray|REMUX"
+    r"|DVDRip|DVDSCR|HDTV|PDTV"
+    r"|x264|x265|H\.?264|H\.?265|HEVC|AVC"
+    r"|AAC|DDP?5?\.?1?|DTS|FLAC|TrueHD|Atmos|DD[25]"
+    r"|PROPER|REPACK|RERIP|INTERNAL|LIMITED|EXTENDED|UNRATED|DIRECTORS"
+    r"|SUBBED|DUBBED|MULTI|FRENCH|GERMAN|SPANISH|ITALIAN"
+    r"|[A-Z0-9]{2,10}"       # all-caps token (likely release group)
+    r")$",
+    re.IGNORECASE,
+)
+
+# Year: a 4-digit number in the range 1900–2099
+_YEAR_RE = re.compile(r"^(19\d{2}|20[0-2]\d)$")
+
+
+def parse_query(q: str) -> dict:
+    """
+    Split a freeform torrent search string into (title, year, extras).
+
+    'Brazil 1944 LAMA'      → title='Brazil',    year=None, extras=['1944','LAMA']
+    'Hoppers 2026 2160p WEB'→ title='Hoppers',   year='2026', extras=['2160p','WEB']
+    'The Bear S03'           → title='The Bear S03', year=None, extras=[]
+    """
+    tokens = q.strip().split()
+    year = None
+    title_tokens: list[str] = []
+    extra_tokens: list[str] = []
+    past_title = False
+
+    for tok in tokens:
+        if _YEAR_RE.match(tok):
+            year = tok
+            past_title = True
+            extra_tokens.append(tok)
+        elif past_title or _RELEASE_TOKENS.match(tok):
+            past_title = True
+            extra_tokens.append(tok)
+        else:
+            title_tokens.append(tok)
+
+    return {
+        "title":  " ".join(title_tokens),
+        "year":   year,
+        "extras": extra_tokens,
+        "raw":    q.strip(),
+    }
+
+
+def build_search_cascade(q: str) -> tuple[list[str], str | None]:
+    """
+    Return (ordered_query_list, detected_year).
+    The list goes from most-specific to broadest; try each until results appear.
+
+    Example for 'Brazil 1944 LAMA':
+      ['Brazil 1944 LAMA', 'Brazil 1944', 'Brazil']   year=None
+      (1944 is treated as year only if it looks like a plausible release year
+       that follows the title — otherwise kept as part of the extras list)
+    """
+    parsed = parse_query(q)
+    title = parsed["title"]
+    year  = parsed["year"]
+
+    candidates: list[str] = []
+
+    # 1. Full original query
+    if q.strip():
+        candidates.append(q.strip())
+
+    # 2. Title + year (without other extras)
+    if title and year:
+        ty = f"{title} {year}"
+        if ty not in candidates:
+            candidates.append(ty)
+
+    # 3. Title only
+    if title and title not in candidates:
+        candidates.append(title)
+
+    # 4. Progressive word-drop on the title (right to left)
+    title_words = title.split()
+    for n in range(len(title_words) - 1, 0, -1):
+        partial = " ".join(title_words[:n])
+        if partial and partial not in candidates:
+            candidates.append(partial)
+
+    return candidates, year
+
+
 # ── Result dataclass ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -217,6 +314,46 @@ class IPTorrentsClient:
             info_url=info_url,
             pubdate=pubdate,
         )
+
+    def smart_search(self, q: str, category: str = "all",
+                     limit: int = 50) -> dict:
+        """
+        Progressive search: tries increasingly broad queries until results appear.
+
+        Returns:
+          {
+            results:       list[IPTResult],
+            query_used:    str | None,        # the query that produced results
+            year:          str | None,        # detected year, if any
+            attempts:      list[str],         # every query tried (incl. successful)
+          }
+        """
+        if not self.is_configured():
+            raise RuntimeError("IPTorrents not configured.")
+
+        cascade, year = build_search_cascade(q)
+        attempts: list[str] = []
+
+        for query in cascade:
+            results = self.search(query=query, category=category, limit=limit)
+            attempts.append(query)
+            if results:
+                # If a year was detected, float results whose title contains it
+                if year:
+                    results.sort(key=lambda r: (year not in r.title, r.title))
+                return {
+                    "results":    results,
+                    "query_used": query,
+                    "year":       year,
+                    "attempts":   attempts,
+                }
+
+        return {
+            "results":    [],
+            "query_used": None,
+            "year":       year,
+            "attempts":   attempts,
+        }
 
     def fetch_torrent_bytes(self, torrent_url: str) -> bytes:
         """Download the .torrent file from IPTorrents and return raw bytes."""
