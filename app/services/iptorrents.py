@@ -156,16 +156,23 @@ class IPTorrentsClient:
         if not title:
             return None
 
-        # ── Links ────────────────────────────────────────────────────────────
-        link_el = item.find("link")
-        info_url = (link_el.text or "").strip() if link_el is not None else ""
+        # ── Info URL (guid = details page, link = download URL on IPT) ───────
+        guid_el = item.find("guid")
+        info_url = (guid_el.text or "").strip() if guid_el is not None else ""
+        torrent_id = _extract_id(info_url) or title[:40]
 
-        # Enclosure carries the .torrent URL + file size
+        # ── Enclosure: .torrent URL + file size ───────────────────────────────
+        # IPT does not percent-encode spaces in the URL — fix that here.
         enclosure = item.find("enclosure")
         torrent_url = ""
         size_bytes = 0
         if enclosure is not None:
-            torrent_url = enclosure.get("url", "")
+            raw_url = enclosure.get("url", "")
+            # Encode spaces in path segment only (preserve query string)
+            path_part, _, query_part = raw_url.partition("?")
+            torrent_url = path_part.replace(" ", "%20")
+            if query_part:
+                torrent_url += "?" + query_part
             try:
                 size_bytes = int(enclosure.get("length", 0))
             except (ValueError, TypeError):
@@ -174,25 +181,25 @@ class IPTorrentsClient:
         if not torrent_url:
             return None
 
-        # ── Torrent ID (from URL or link) ─────────────────────────────────
-        torrent_id = _extract_id(torrent_url) or _extract_id(info_url) or title[:40]
-
-        # ── Category ─────────────────────────────────────────────────────────
-        cat_el = item.find("category")
-        ipt_category = (cat_el.text or "").strip() if cat_el is not None else ""
-        suggested_type = _guess_type_from_ipt_category(ipt_category)
-
-        # ── Seeds / Leechers (from description text) ──────────────────────
+        # ── Description: "{size}; {Category/Sub} (S:{n} L:{n})" ─────────────
         desc_el = item.find("description")
-        desc = desc_el.text or "" if desc_el is not None else ""
-        seeders = _parse_int_from_text(desc, r"[Ss]eeders?[:\s]+(\d+)") or \
-                  _parse_int_from_text(desc, r"[Ss]eeds[:\s]+(\d+)") or 0
-        leechers = _parse_int_from_text(desc, r"[Ll]eechers?[:\s]+(\d+)") or \
-                   _parse_int_from_text(desc, r"[Ll]eeches[:\s]+(\d+)") or 0
+        desc = (desc_el.text or "") if desc_el is not None else ""
 
-        # Also try to extract size from description if enclosure length was 0
+        # Category — text between "; " and " ("
+        ipt_category = ""
+        cat_m = re.search(r";\s*(.+?)\s*(?:\(S:|$)", desc)
+        if cat_m:
+            ipt_category = cat_m.group(1).strip()
+
+        # Seeds / Leechers — "(S:N L:N)"
+        seeders  = _parse_int_from_text(desc, r"S:(\d+)")
+        leechers = _parse_int_from_text(desc, r"L:(\d+)")
+
+        # Size fallback from description if enclosure length was missing
         if size_bytes == 0:
             size_bytes = _parse_size_from_text(desc)
+
+        suggested_type = _guess_type_from_ipt_category(ipt_category)
 
         # ── Pub date ─────────────────────────────────────────────────────────
         pubdate_el = item.find("pubDate")
