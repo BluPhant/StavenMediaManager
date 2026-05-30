@@ -274,6 +274,17 @@
     Mask="false">iptorrents.com</Config>
 
   <Config
+    Name="BTN API Key"
+    Target="BTN_API_KEY"
+    Default=""
+    Mode=""
+    Description="BroadcasTheNet API key — from your BTN profile under Manage API Keys. Enables TV search via BTN."
+    Type="Variable"
+    Display="always"
+    Required="false"
+    Mask="true"></Config>
+
+  <Config
     Name="Plex URL"
     Target="PLEX_URL"
     Default=""

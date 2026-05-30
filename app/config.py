@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     iptorrents_passkey: str = ""
     iptorrents_domain: str = "iptorrents.com"
 
+    # ── BTN (BroadcasTheNet) search (optional) ────────────────────────────
+    # BTN_API_KEY   API key from your BTN profile → Manage API Keys
+    btn_api_key: str = ""
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{os.path.join(self.config_dir, 'media_manager.db')}"

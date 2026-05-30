@@ -775,13 +775,30 @@ const JobPoller = {
 // ─────────────────────────────────────────────
 const IPTSearch = {
   _lastQuery: '',
-  _lastCat: 'all',
+  _lastCat: 'ipt:all',
+
+  // Dropdown options: value is "source:category"
+  _catOptions() {
+    const sel = this._lastCat;
+    const o = (v, label) => `<option value="${v}"${sel===v?' selected':''}>${label}</option>`;
+    return [
+      o('ipt:all',        'All · IPT'),
+      o('ipt:movies',     'Movies · IPT'),
+      o('ipt:tv',         'TV · IPT'),
+      o('btn:tv',         'TV · BTN'),
+      o('ipt:music',      'Music · IPT'),
+      o('ipt:audiobooks', 'Audiobooks · IPT'),
+      o('ipt:games',      'Games · IPT'),
+      o('ipt:ebooks',     'Ebooks · IPT'),
+      o('ipt:software',   'Software · IPT'),
+    ].join('');
+  },
 
   async render() {
     Views._setApp(`
       <div class="d-flex align-items-center gap-2 mb-4">
         <i class="bi bi-search text-info fs-5"></i>
-        <h5 class="mb-0">IPTorrents Search</h5>
+        <h5 class="mb-0">Torrent Search</h5>
       </div>
       <div class="row g-2 mb-3">
         <div class="col-12 col-md-6">
@@ -792,14 +809,7 @@ const IPTSearch = {
         </div>
         <div class="col-auto">
           <select id="ipt-cat" class="form-select bg-dark text-white border-secondary">
-            <option value="all"${this._lastCat==='all'?' selected':''}>All Categories</option>
-            <option value="movies"${this._lastCat==='movies'?' selected':''}>Movies</option>
-            <option value="tv"${this._lastCat==='tv'?' selected':''}>TV</option>
-            <option value="music"${this._lastCat==='music'?' selected':''}>Music</option>
-            <option value="audiobooks"${this._lastCat==='audiobooks'?' selected':''}>Audiobooks</option>
-            <option value="games"${this._lastCat==='games'?' selected':''}>Games</option>
-            <option value="ebooks"${this._lastCat==='ebooks'?' selected':''}>Ebooks</option>
-            <option value="software"${this._lastCat==='software'?' selected':''}>Software</option>
+            ${this._catOptions()}
           </select>
         </div>
         <div class="col-auto">
@@ -815,10 +825,12 @@ const IPTSearch = {
   },
 
   async search() {
-    const q   = (document.getElementById('ipt-query')?.value || '').trim();
-    const cat = document.getElementById('ipt-cat')?.value || 'all';
+    const q      = (document.getElementById('ipt-query')?.value || '').trim();
+    const srcCat = document.getElementById('ipt-cat')?.value || 'ipt:all';
     this._lastQuery = q;
-    this._lastCat   = cat;
+    this._lastCat   = srcCat;
+
+    const [source, cat] = srcCat.split(':');
 
     const el = document.getElementById('ipt-results');
     if (!el) return;
@@ -826,7 +838,31 @@ const IPTSearch = {
 
     let data;
     try {
-      data = await API.get(`/iptorrents/smart-search?q=${enc(q)}&cat=${enc(cat)}&limit=50`);
+      if (source === 'btn') {
+        const raw = await API.get(`/btn/search?q=${enc(q)}&limit=50`);
+        // Normalise BTN results to the same display shape as IPT smart-search
+        data = {
+          results: raw.map(r => ({
+            torrent_id:     r.torrent_id,
+            title:          r.title,
+            size_bytes:     r.size_bytes,
+            seeders:        r.seeders,
+            leechers:       r.leechers,
+            ipt_category:   [r.source, r.resolution, r.codec].filter(Boolean).join(' · '),
+            suggested_type: 'tv',
+            torrent_url:    r.torrent_url,
+            info_url:       r.info_url,
+            pubdate:        r.pubdate,
+            _source:        'btn',
+          })),
+          query_used: q || null,
+          year:       null,
+          attempts:   [q],
+        };
+      } else {
+        data = await API.get(`/iptorrents/smart-search?q=${enc(q)}&cat=${enc(cat)}&limit=50`);
+        data.results.forEach(r => { r._source = 'ipt'; });
+      }
     } catch (e) {
       el.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`;
       return;
@@ -881,7 +917,7 @@ const IPTSearch = {
           </td>
           <td class="text-nowrap">
             <button class="btn btn-sm btn-outline-info"
-                    onclick="IPTSearch.grab(${jsStr(r.torrent_url)}, ${jsStr(r.title)}, ${jsStr(r.suggested_type)})"
+                    onclick="IPTSearch.grab(${jsStr(r.torrent_url)}, ${jsStr(r.title)}, ${jsStr(r.suggested_type)}, ${jsStr(r._source||'ipt')})"
                     title="Add to rTorrent seedbox">
               <i class="bi bi-cloud-download me-1"></i>Grab
             </button>
@@ -901,11 +937,12 @@ const IPTSearch = {
       </div>`;
   },
 
-  async grab(torrentUrl, title, suggestedType) {
-    const label = window._iptTag || '';   // use default tag from status if known
+  async grab(torrentUrl, title, suggestedType, source = 'ipt') {
+    const label    = window._iptTag || '';
+    const endpoint = source === 'btn' ? '/btn/grab' : '/iptorrents/grab';
     toast(`Grabbing ${title.slice(0, 50)}…`, 'info');
     try {
-      await API.post('/iptorrents/grab', { torrent_url: torrentUrl, label });
+      await API.post(endpoint, { torrent_url: torrentUrl, label });
       toast(`✓ Added to rTorrent — sync when ready to download`, 'success');
     } catch (e) {
       toast(`Grab failed: ${e.message}`, 'danger');
