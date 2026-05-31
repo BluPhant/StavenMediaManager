@@ -391,6 +391,7 @@ function _matchPanelHtml() {
 const MovieMatch = {
   _category: null,
   _item: null,
+  _results: [],   // cache so onclick can reference by index, avoiding inline string escaping
 
   async init(category, item, prefetchedData) {
     this._category = category;
@@ -442,11 +443,12 @@ const MovieMatch = {
       return;
     }
 
-    resultsEl.innerHTML = results.map(r => `
+    // Store results so onclick can reference by index — avoids embedding raw
+    // overview/title strings inside HTML attributes (breaks on newlines / quotes).
+    this._results = results;
+    resultsEl.innerHTML = results.map((r, i) => `
       <div class="col-6 col-md-4 col-lg-3 col-xl-2">
-        <div class="card h-100 match-result-card"
-             onclick="MovieMatch.select(${r.tmdb_id}, ${jsStr(r.title)}, ${r.year ?? 'null'},
-                      ${jsStr(r.poster_url || '')}, ${jsStr(r.overview || '')}, ${jsStr(r.formatted_name)})">
+        <div class="card h-100 match-result-card" onclick="MovieMatch._selectIdx(${i})">
           ${r.poster_url
             ? `<img src="${esc(r.poster_url)}" class="card-img-top" alt=""
                     style="aspect-ratio:2/3;object-fit:cover">`
@@ -459,6 +461,12 @@ const MovieMatch = {
           </div>
         </div>
       </div>`).join('');
+  },
+
+  _selectIdx(i) {
+    const r = this._results[i];
+    if (!r) return;
+    this.select(r.tmdb_id, r.title, r.year ?? null, r.poster_url || null, r.overview || null, r.formatted_name);
   },
 
   async select(tmdbId, title, year, posterUrl, overview, formattedName) {
