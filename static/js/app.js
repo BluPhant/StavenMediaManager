@@ -604,6 +604,20 @@ const Actions = {
     }
   },
 
+  toggleLowQ() {
+    if (!this._cachedMovieResults) return;
+    this._showLowQ = !this._showLowQ;
+    const mf = _smartMovieFilter(this._cachedMovieResults, this._showLowQ);
+    this._renderResults({
+      results:    mf.results.map(r => ({ ...r, _source: 'ipt' })),
+      _movieTier: mf.tierLabel,
+      _lowQCount: mf.lowQCount,
+      query_used: this._lastQuery,
+      year:       null,
+      attempts:   [this._lastQuery],
+    }, 'movies');
+  },
+
   async stopTorrent(hash, btn) {
     if (!confirm('Stop this torrent on the seedbox?')) return;
     btn.disabled = true;
@@ -776,6 +790,8 @@ const JobPoller = {
 const IPTSearch = {
   _lastQuery: '',
   _lastCat: 'ipt:all',
+  _showLowQ: false,           // toggle: include CAM/TS/Screener in movie results
+  _cachedMovieResults: null,  // raw results before movie filter (for toggling)
 
   // Dropdown options: value is "source:category"
   _catOptions() {
@@ -863,10 +879,14 @@ const IPTSearch = {
         data = await API.get(`/iptorrents/smart-search?q=${enc(q)}&cat=${enc(cat)}&limit=50`);
         data.results.forEach(r => { r._source = 'ipt'; });
         if (cat === 'movies' && data.results.length) {
-          const mf = _smartMovieFilter(data.results);
+          this._showLowQ = false;
+          this._cachedMovieResults = data.results;
+          const mf = _smartMovieFilter(data.results, false);
           data.results    = mf.results;
           data._movieTier = mf.tierLabel;
-          data._moviePre  = mf.totalBefore;
+          data._lowQCount = mf.lowQCount;
+        } else {
+          this._cachedMovieResults = null;
         }
       }
     } catch (e) {
@@ -874,26 +894,42 @@ const IPTSearch = {
       return;
     }
 
+    this._renderResults(data, cat);
+  },
+
+  _renderResults(data, cat) {
+    const el = document.getElementById('ipt-results');
+    if (!el) return;
+
     const { results, query_used, year, attempts } = data;
 
     // ── Movie resolution filter badge ────────────────────────────────────────
     let infoHtml = '';
-    if (data._movieTier) {
-      const tierColor = data._movieTier === '2160p' ? 'text-warning' : 'text-info';
+    if (cat === 'movies') {
+      const tierColor = data._movieTier === '2160p' ? 'text-warning' : data._movieTier === '1080p' ? 'text-info' : 'text-secondary';
+      const tierLabel = data._movieTier || 'all';
+      const lowQCount = data._lowQCount || 0;
+      const lowQNote  = lowQCount > 0 && !this._showLowQ
+        ? `&nbsp;·&nbsp; <span class="text-secondary">${lowQCount} CAM/TS/Screener excluded</span>
+           <button class="btn btn-link btn-sm text-secondary p-0 ms-1" style="font-size:.75rem"
+                   onclick="IPTSearch.toggleLowQ()">show&nbsp;anyway</button>`
+        : lowQCount > 0 && this._showLowQ
+        ? `&nbsp;·&nbsp; <span class="text-warning">CAM/TS/Screener visible</span>
+           <button class="btn btn-link btn-sm text-secondary p-0 ms-1" style="font-size:.75rem"
+                   onclick="IPTSearch.toggleLowQ()">hide</button>`
+        : '';
       infoHtml += `
         <div class="alert alert-secondary py-2 small mb-2" style="border-color:#444">
           <i class="bi bi-funnel-fill me-1 ${tierColor}"></i>
-          Filtered to <strong class="${tierColor}">${esc(data._movieTier)}</strong>
-          &nbsp;·&nbsp; sorted by size · deduplicated within 1 GB by seeders
-        </div>`;
-    } else if (cat === 'movies' && results.length) {
-      infoHtml += `
-        <div class="alert alert-secondary py-2 small mb-2" style="border-color:#444">
-          <i class="bi bi-funnel me-1 text-secondary"></i>
-          No 2160p or 1080p results — showing all
+          ${data._movieTier
+            ? `Filtered to <strong class="${tierColor}">${esc(tierLabel)}</strong> · sorted by size · best per GB`
+            : 'No 2160p or 1080p found — showing all'}
+          ${lowQNote}
         </div>`;
     }
-    if (attempts.length > 1 && query_used) {
+
+    // ── Cascade fallback info ────────────────────────────────────────────────
+    if (attempts && attempts.length > 1 && query_used) {
       const tried = attempts.slice(0, -1).map(a => `<code>${esc(a)}</code>`).join(' → ');
       infoHtml += `
         <div class="alert alert-secondary py-2 small mb-3" style="border-color:#444">
@@ -909,7 +945,7 @@ const IPTSearch = {
     }
 
     if (!results.length) {
-      const allTried = attempts.map(a => `<code>${esc(a)}</code>`).join(', ');
+      const allTried = (attempts || [query_used]).map(a => `<code>${esc(a)}</code>`).join(', ');
       el.innerHTML = infoHtml + `
         <div class="text-secondary text-center py-4">
           No results found after trying: ${allTried}
@@ -921,7 +957,6 @@ const IPTSearch = {
       const size  = _humanSize(r.size_bytes);
       const seeds = r.seeders  > 0 ? `<span class="text-success">${r.seeders}</span>`  : `<span class="text-secondary">—</span>`;
       const peers = r.leechers > 0 ? `<span class="text-warning">${r.leechers}</span>` : `<span class="text-secondary">—</span>`;
-      // Highlight year in title if detected
       const titleHtml = year
         ? esc(r.title).replace(new RegExp(`(${esc(year)})`, 'g'), '<mark class="bg-transparent text-warning fw-bold">$1</mark>')
         : esc(r.title);
@@ -929,7 +964,7 @@ const IPTSearch = {
         <tr>
           <td>
             <div class="fw-semibold lh-sm">${titleHtml}</div>
-            <div class="text-secondary" style="font-size:.75rem">${esc(r.ipt_category)}${r.pubdate ? ' · ' + esc(_shortDate(r.pubdate)) : ''}</div>
+            <div class="text-secondary" style="font-size:.75rem">${esc(r.ipt_category||'')}${r.pubdate ? ' · ' + esc(_shortDate(r.pubdate)) : ''}</div>
           </td>
           <td class="text-nowrap text-secondary small">${size}</td>
           <td class="text-nowrap small">${seeds} / ${peers}</td>
@@ -972,32 +1007,36 @@ const IPTSearch = {
 };
 
 // ── Smart movie filter ────────────────────────────────────────────────────────
-// Applied when searching movies on IPT.
+// CAM/TS/Screener quality tags — excluded by default, shown on request.
+const _LOWQ_RE = /\b(cam(?:rip)?|hdcam|telesync|telecine|screener|dvdscr|ts(?=\b)|tc(?=\b)|r[2-9](?=\b))\b/i;
+
 // Priority: 2160p → 1080p → all.  Within a resolution tier, sort size
 // ascending then deduplicate: within any 1 GB size cluster keep only the
 // result with the most seeders.
-function _smartMovieFilter(results) {
+// includeLowQ = false → strip CAM/TS/Screener first.
+function _smartMovieFilter(results, includeLowQ = false) {
+  // 1. Optionally exclude low-quality sources
+  const lowQItems = results.filter(r => _LOWQ_RE.test(r.title));
+  const clean     = includeLowQ ? results : results.filter(r => !_LOWQ_RE.test(r.title));
+  const lowQCount = lowQItems.length;
+
   const tiers = [
     { label: '2160p', re: /\b(2160p|4k|uhd)\b/i },
     { label: '1080p', re: /\b1080p\b/i },
   ];
 
-  let filtered = results;
+  let filtered = clean;
   let tierLabel = null;
 
   for (const tier of tiers) {
-    const match = results.filter(r => tier.re.test(r.title));
-    if (match.length) {
-      filtered = match;
-      tierLabel = tier.label;
-      break;
-    }
+    const match = clean.filter(r => tier.re.test(r.title));
+    if (match.length) { filtered = match; tierLabel = tier.label; break; }
   }
 
-  // Sort by size ascending
+  // 2. Sort by size ascending
   filtered = [...filtered].sort((a, b) => a.size_bytes - b.size_bytes);
 
-  // Deduplicate: within each 1 GB cluster keep the highest-seeder result
+  // 3. Deduplicate: within each 1 GB cluster keep the highest-seeder result
   const GB = 1_000_000_000;
   const deduped = [];
   let i = 0;
@@ -1010,7 +1049,7 @@ function _smartMovieFilter(results) {
     i = j;
   }
 
-  return { results: deduped, tierLabel, totalBefore: filtered.length };
+  return { results: deduped, tierLabel, lowQCount };
 }
 
 function _iptTypeIcon(type) {
