@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from ..config import settings
 from ..services.iptorrents import IPTorrentsClient, build_search_cascade
-from ..services.sources.rtorrent import RtorrentSource
+from ..services.sources.rtorrent import RtorrentSource, extract_info_hash
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/iptorrents", tags=["iptorrents"])
@@ -127,15 +127,16 @@ def iptorrents_smart_search(q: str = "", cat: str = "all", limit: int = 50):
 
 class GrabRequest(BaseModel):
     torrent_url: str
-    label: str = ""   # rTorrent label; defaults to RTORRENT_TAG if blank
+    label: str = ""    # rTorrent label; defaults to RTORRENT_TAG if blank
+    force: bool = False  # skip duplicate check
 
 
 @router.post("/grab", status_code=201)
 def iptorrents_grab(req: GrabRequest):
     """
     Fetch the .torrent file from IPTorrents and load it into rTorrent.
-    The label (ruTorrent tag) defaults to RTORRENT_TAG so the Sync job
-    will pick it up automatically once it finishes downloading on the seedbox.
+    Returns 409 if the torrent is already on the seedbox (same info-hash).
+    Pass force=true to load anyway.
     """
     if not _ipt.is_configured():
         raise HTTPException(
@@ -160,7 +161,30 @@ def iptorrents_grab(req: GrabRequest):
         logger.error(f"IPT grab fetch error: {exc}")
         raise HTTPException(status_code=502, detail=f"Failed to fetch .torrent: {exc}")
 
-    # 2. Load into rTorrent
+    # 2. Hash check — is this torrent already on the seedbox?
+    if not req.force:
+        try:
+            info_hash = extract_info_hash(torrent_bytes)
+            brief = rt.list_all_brief()
+            if info_hash in brief:
+                existing = brief[info_hash]
+                logger.info(f"IPT grab: duplicate detected hash={info_hash} name={existing['name']!r}")
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "conflict": True,
+                        "hash":     info_hash,
+                        "name":     existing["name"],
+                        "label":    existing["label"],
+                        "pct":      existing["pct"],
+                    },
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning(f"IPT grab hash-check failed (non-fatal): {exc}")
+
+    # 3. Load into rTorrent
     logger.info(f"IPT grab: loading {len(torrent_bytes)} bytes into rTorrent (label={label!r})")
     try:
         rt.load_torrent(torrent_bytes, label=label)

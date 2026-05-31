@@ -21,6 +21,7 @@ Download strategy:
 All credentials come from environment variables (see config.py).
 No secrets are stored in this file.
 """
+import hashlib
 import logging
 import os
 import re
@@ -91,7 +92,47 @@ def detect_type(label: str, file_paths: list[str]) -> str:
     return max(votes, key=votes.get) if votes else "_unsorted"
 
 
-# ── XMLRPC transport with timeout ────────────────────────────────────────────
+# ── Torrent info-hash extraction ─────────────────────────────────────────────
+
+def extract_info_hash(torrent_bytes: bytes) -> str:
+    """
+    Return the uppercase hex info-hash (SHA-1 of the bencoded 'info' dict)
+    from a raw .torrent file.  Pure stdlib — no external deps.
+    """
+    marker = b"4:info"
+    idx = torrent_bytes.find(marker)
+    if idx == -1:
+        raise ValueError("No 'info' key found in torrent data")
+    info_start = idx + len(marker)
+    info_end = _bencode_end(torrent_bytes, info_start)
+    return hashlib.sha1(torrent_bytes[info_start:info_end]).hexdigest().upper()
+
+
+def _bencode_end(data: bytes, pos: int) -> int:
+    """Return the index one past the end of the bencoded value starting at pos."""
+    c = data[pos:pos + 1]
+    if c == b"d":
+        pos += 1
+        while data[pos:pos + 1] != b"e":
+            pos = _bencode_end(data, pos)   # key
+            pos = _bencode_end(data, pos)   # value
+        return pos + 1
+    elif c == b"l":
+        pos += 1
+        while data[pos:pos + 1] != b"e":
+            pos = _bencode_end(data, pos)
+        return pos + 1
+    elif c == b"i":
+        return data.index(b"e", pos + 1) + 1
+    elif c.isdigit():
+        colon = data.index(b":", pos)
+        length = int(data[pos:colon])
+        return colon + 1 + length
+    else:
+        raise ValueError(f"Unknown bencode type {c!r} at offset {pos}")
+
+
+# ── XMLRPC transport with timeout ─────────────────────────────────────────────
 
 class _TimeoutTransport(xmlrpc.client.SafeTransport):
     def __init__(self, timeout: int = 30):
@@ -304,6 +345,26 @@ class RtorrentSource(BaseSource):
             logger.info(f"Loaded torrent into rTorrent with label={tag!r}")
         except Exception as exc:
             raise RuntimeError(f"rTorrent load.raw_start failed: {exc}") from exc
+
+    def list_all_brief(self) -> dict[str, dict]:
+        """
+        Return every torrent currently in rTorrent as {HASH: {name, label, pct}}.
+        Fast — single d.multicall2 call.
+        """
+        proxy = self._proxy()
+        try:
+            rows = proxy.d.multicall2("", "main",
+                "d.hash=", "d.name=", "d.custom1=",
+                "d.completed_bytes=", "d.size_bytes=")
+        except Exception as exc:
+            raise RuntimeError(f"rTorrent d.multicall2 failed: {exc}") from exc
+
+        result = {}
+        for row in rows:
+            hash_, name, label, done, total = row
+            pct = round(done / max(total, 1) * 100, 1)
+            result[hash_.upper()] = {"name": name, "label": label, "pct": pct}
+        return result
 
     def stop_torrent(self, hash_: str) -> None:
         """Stop (pause) a torrent by hash via XMLRPC d.stop."""

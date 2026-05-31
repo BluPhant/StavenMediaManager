@@ -961,9 +961,9 @@ const IPTSearch = {
         ? esc(r.title).replace(new RegExp(`(${esc(year)})`, 'g'), '<mark class="bg-transparent text-warning fw-bold">$1</mark>')
         : esc(r.title);
       return `
-        <tr>
+        <tr data-result-title="${esc(r.title)}">
           <td>
-            <div class="fw-semibold lh-sm">${titleHtml}</div>
+            <div class="fw-semibold lh-sm">${titleHtml}<span class="sbx-badge"></span></div>
             <div class="text-secondary" style="font-size:.75rem">${esc(r.ipt_category||'')}${r.pubdate ? ' · ' + esc(_shortDate(r.pubdate)) : ''}</div>
           </td>
           <td class="text-nowrap text-secondary small">${size}</td>
@@ -991,18 +991,51 @@ const IPTSearch = {
           <tbody>${rows}</tbody>
         </table>
       </div>`;
+
+    // Async SBX dupe check — badges rows already on seedbox (non-blocking)
+    this._checkSbxDupes();
   },
 
-  async grab(torrentRef, title, suggestedType, source = 'ipt') {
-    const label = window._iptTag || '';
+  async grab(torrentRef, title, suggestedType, source = 'ipt', force = false) {
+    const label    = window._iptTag || '';
+    const endpoint = source === 'btn' ? '/btn/grab' : '/iptorrents/grab';
+    const body     = source === 'btn'
+      ? { torrent_url: torrentRef, label }
+      : { torrent_url: torrentRef, label, force };
+
     toast(`Grabbing ${title.slice(0, 50)}…`, 'info');
     try {
-      const endpoint = source === 'btn' ? '/btn/grab' : '/iptorrents/grab';
-      await API.post(endpoint, { torrent_url: torrentRef, label });
+      await API.post(endpoint, body);
       toast(`✓ Added to rTorrent — sync when ready to download`, 'success');
     } catch (e) {
+      // 409 = already on seedbox — show conflict modal
+      if (e.message && e.message.includes('"conflict"')) {
+        try {
+          const detail = JSON.parse(e.message);
+          if (detail.conflict) {
+            _showSbxConflict(detail, torrentRef, title, suggestedType, source);
+            return;
+          }
+        } catch (_) {}
+      }
       toast(`Grab failed: ${e.message}`, 'danger');
     }
+  },
+
+  // Called after search results render — badges rows already on seedbox by name
+  async _checkSbxDupes() {
+    let brief;
+    try { brief = await API.get('/sources/brief'); } catch (_) { return; }
+    // Build a normalised name set from seedbox
+    const sbxNames = Object.values(brief).map(t => _normTitle(t.name));
+    document.querySelectorAll('[data-result-title]').forEach(row => {
+      const norm = _normTitle(row.dataset.resultTitle);
+      const hit  = sbxNames.some(n => n && norm && (n.includes(norm) || norm.includes(n)));
+      if (hit) {
+        const badge = row.querySelector('.sbx-badge');
+        if (badge) { badge.textContent = 'On SBX'; badge.className = 'sbx-badge badge bg-warning text-dark ms-1'; }
+      }
+    });
   },
 };
 
@@ -1055,6 +1088,44 @@ function _smartMovieFilter(results, includeLowQ = false) {
 function _iptTypeIcon(type) {
   const { icon, color } = categoryIcon(type);
   return `<i class="bi ${icon} ${color}"></i>`;
+}
+
+function _normTitle(s) {
+  // Strip common release tags and punctuation for loose name comparison
+  return (s || '').toLowerCase()
+    .replace(/\b(2160p|1080p|720p|4k|uhd|hdr\w*|web[-.]?dl|webrip|bluray|bdrip|hevc|h\.?26[45]|avc|x26[45]|dts|aac|dd[p+]?\d*|atmos|remux|repack|proper|\d{4})\b/g, '')
+    .replace(/[._\-[\]()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function _showSbxConflict(detail, torrentRef, title, suggestedType, source) {
+  const pct   = detail.pct ?? '?';
+  const label = detail.label || '(no label)';
+  const id    = 'sbx-conflict-modal';
+  document.getElementById(id)?.remove();
+  const html = `
+    <div class="modal fade" id="${id}" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content bg-dark text-white border-warning">
+          <div class="modal-header border-warning py-2">
+            <h6 class="modal-title mb-0"><i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>Already on Seedbox</h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body small">
+            <p class="mb-1"><strong>${esc(detail.name)}</strong></p>
+            <p class="text-secondary mb-0">${pct}% complete &nbsp;·&nbsp; label: <code>${esc(label)}</code></p>
+          </div>
+          <div class="modal-footer border-secondary py-2">
+            <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('app').insertAdjacentHTML('beforeend', html);
+  const modal = new bootstrap.Modal(document.getElementById(id));
+  document.getElementById(id).addEventListener('hidden.bs.modal', e => e.target.remove());
+  modal.show();
 }
 
 function _shortDate(dateStr) {

@@ -87,6 +87,18 @@ def stop_torrent(hash_: str):
     return {"status": "stopped", "hash": hash_}
 
 
+@router.get("/brief")
+def sources_brief():
+    """Return all seedbox torrents as {hash: {name, label, pct}} — for duplicate detection."""
+    rt = RtorrentSource()
+    if not rt.is_configured():
+        raise HTTPException(status_code=400, detail="rTorrent source not configured.")
+    try:
+        return rt.list_all_brief()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
 @router.get("/preview")
 def preview_sync():
     """List torrents that would be imported on next sync (dry run — no download)."""
