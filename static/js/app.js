@@ -850,7 +850,7 @@ const IPTSearch = {
             leechers:       r.leechers,
             ipt_category:   [r.source, r.resolution, r.codec].filter(Boolean).join(' · '),
             suggested_type: 'tv',
-            torrent_url:    r.torrent_url,
+            torrent_url:    '',          // resolved at grab time via torrent_id
             info_url:       r.info_url,
             pubdate:        r.pubdate,
             _source:        'btn',
@@ -917,7 +917,7 @@ const IPTSearch = {
           </td>
           <td class="text-nowrap">
             <button class="btn btn-sm btn-outline-info"
-                    onclick="IPTSearch.grab(${jsStr(r.torrent_url)}, ${jsStr(r.title)}, ${jsStr(r.suggested_type)}, ${jsStr(r._source||'ipt')})"
+                    onclick="IPTSearch.grab(${jsStr(r._source==='btn' ? r.torrent_id : r.torrent_url)}, ${jsStr(r.title)}, ${jsStr(r.suggested_type)}, ${jsStr(r._source||'ipt')})"
                     title="Add to rTorrent seedbox">
               <i class="bi bi-cloud-download me-1"></i>Grab
             </button>
@@ -937,12 +937,15 @@ const IPTSearch = {
       </div>`;
   },
 
-  async grab(torrentUrl, title, suggestedType, source = 'ipt') {
-    const label    = window._iptTag || '';
-    const endpoint = source === 'btn' ? '/btn/grab' : '/iptorrents/grab';
+  async grab(torrentRef, title, suggestedType, source = 'ipt') {
+    const label = window._iptTag || '';
     toast(`Grabbing ${title.slice(0, 50)}…`, 'info');
     try {
-      await API.post(endpoint, { torrent_url: torrentUrl, label });
+      if (source === 'btn') {
+        await API.post('/btn/grab', { torrent_id: torrentRef, label });
+      } else {
+        await API.post('/iptorrents/grab', { torrent_url: torrentRef, label });
+      }
       toast(`✓ Added to rTorrent — sync when ready to download`, 'success');
     } catch (e) {
       toast(`Grab failed: ${e.message}`, 'danger');

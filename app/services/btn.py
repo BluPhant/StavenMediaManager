@@ -1,14 +1,15 @@
 """
-BroadcasTheNet (BTN) client — search via JSON API, fetch .torrent files.
+BroadcasTheNet (BTN) client — search via JSON-RPC API, fetch .torrent files.
+
+API docs: https://apidocs.broadcasthe.net/
 
 No external dependencies — uses only Python stdlib (urllib, json).
 
 Credentials via environment variable:
-  BTN_API_KEY — API key from your BTN profile page (Manage API Keys)
+  BTN_API_KEY — API key from your BTN profile → Manage API Keys
 """
 import json
 import logging
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -16,7 +17,7 @@ from ..config import settings
 
 logger = logging.getLogger(__name__)
 
-BTN_API = "https://broadcasthe.net/api.php"
+BTN_API = "https://api.broadcasthe.net/"
 
 
 # ── Result dataclass ──────────────────────────────────────────────────────────
@@ -24,17 +25,16 @@ BTN_API = "https://broadcasthe.net/api.php"
 @dataclass
 class BTNResult:
     torrent_id: str
-    title: str           # series + group name, e.g. "Breaking Bad S01E01 720p WEB-DL"
-    series: str          # series name only, e.g. "Breaking Bad"
+    title: str           # ReleaseName — full scene name e.g. "Futurama.S07E01.720p.WEB-DL…"
+    series: str          # Series name only, e.g. "Futurama"
     size_bytes: int
     seeders: int
     leechers: int
     category: str        # Episode | Season | Show
-    source: str          # WEB-DL | HDTV | BluRay | ...
-    resolution: str      # 1080p | 720p | ...
-    codec: str           # H.264 | H.265 | ...
-    torrent_url: str     # direct download URL (auth embedded by BTN)
-    info_url: str        # BTN details page
+    source: str          # WEB-DL | HDTV | BluRay | …
+    resolution: str      # 1080p | 720p | …
+    codec: str           # H.264 | H.265 | …
+    info_url: str
     pubdate: str = ""
     extra: dict = field(default_factory=dict)
 
@@ -46,34 +46,47 @@ class BTNClient:
     def is_configured(self) -> bool:
         return bool(settings.btn_api_key)
 
-    def _api(self, action: str, params: dict) -> dict:
-        p = {"apikey": settings.btn_api_key, "action": action, **params}
-        url = f"{BTN_API}?{urllib.parse.urlencode(p)}"
-        req = urllib.request.Request(url, headers={"User-Agent": "StavenMediaManager/1.0"})
+    # ── JSON-RPC transport ────────────────────────────────────────────────────
+
+    def _rpc(self, method: str, *params):
+        """POST a JSON-RPC request and return the 'result' value."""
+        body = json.dumps({"method": method, "params": list(params), "id": 1}).encode()
+        req = urllib.request.Request(
+            BTN_API,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "StavenMediaManager/1.0",
+            },
+        )
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 raw = resp.read().decode()
         except Exception as exc:
             raise RuntimeError(f"BTN API request failed: {exc}") from exc
+
         try:
-            return json.loads(raw)
+            data = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"BTN API returned invalid JSON: {raw[:200]!r}") from exc
+            snippet = raw[:300]
+            raise RuntimeError(f"BTN API returned invalid JSON: {snippet!r}") from exc
+
+        if data.get("error"):
+            raise RuntimeError(f"BTN API error: {data['error']}")
+
+        return data.get("result")
+
+    # ── Search ────────────────────────────────────────────────────────────────
 
     def search(self, query: str, limit: int = 50) -> list[BTNResult]:
-        """Search BTN via the getTorrents API action."""
+        """Search BTN via getTorrentsSearch."""
         if not self.is_configured():
             raise RuntimeError("BTN not configured (BTN_API_KEY missing).")
 
         logger.info(f"BTN search: query={query!r} limit={limit}")
-        data = self._api("getTorrents", {
-            "searchstr": query,
-            "results":   str(limit),
-            "offset":    "0",
-        })
+        result = self._rpc("getTorrentsSearch", settings.btn_api_key, {"search": query}, limit)
 
-        # Empty results come back as a list, not a dict
-        torrents = data.get("torrents") or {}
+        torrents = (result or {}).get("Torrents") or {}
         if not isinstance(torrents, dict):
             return []
 
@@ -90,24 +103,20 @@ class BTNClient:
         return results
 
     def _parse_torrent(self, tid: str, t: dict) -> BTNResult:
-        series = t.get("Series") or t.get("SeriesName") or ""
-        group  = t.get("GroupName") or ""
-        # Build display title: "Series GroupName" without redundant repetition
-        if group and series and series.lower() not in group.lower():
-            title = f"{series} {group}".strip()
-        elif group:
-            title = group
-        else:
-            title = series or f"Torrent {tid}"
+        release = t.get("ReleaseName") or t.get("GroupName") or f"Torrent {tid}"
+        series  = t.get("Series") or t.get("GroupName") or ""
 
         try:
             size_bytes = int(t.get("Size") or 0)
         except (ValueError, TypeError):
             size_bytes = 0
 
+        torrent_id = str(t.get("TorrentID") or tid)
+        info_url = f"https://broadcasthe.net/torrents.php?id={torrent_id}" if torrent_id else ""
+
         return BTNResult(
-            torrent_id=str(tid),
-            title=title,
+            torrent_id=torrent_id,
+            title=release,
             series=series,
             size_bytes=size_bytes,
             seeders=int(t.get("Seeders") or 0),
@@ -116,13 +125,26 @@ class BTNClient:
             source=t.get("Source") or "",
             resolution=t.get("Resolution") or "",
             codec=t.get("Codec") or "",
-            torrent_url=t.get("DownloadURL") or t.get("TorrentLink") or "",
-            info_url=t.get("DetailsLink") or "",
+            info_url=info_url,
             pubdate=str(t.get("Time") or ""),
         )
 
+    # ── Download URL resolution ────────────────────────────────────────────────
+
+    def get_torrent_url(self, torrent_id: str) -> str:
+        """Resolve a BTN torrent ID to a direct .torrent download URL."""
+        logger.info(f"BTN getTorrentsUrl: torrent_id={torrent_id}")
+        result = self._rpc("getTorrentsUrl", settings.btn_api_key, int(torrent_id))
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            return result.get("DownloadURL") or result.get("URL") or result.get("download") or ""
+        raise RuntimeError(f"Unexpected getTorrentsUrl response: {result!r}")
+
+    # ── Fetch bytes ────────────────────────────────────────────────────────────
+
     def fetch_torrent_bytes(self, torrent_url: str) -> bytes:
-        """Download the .torrent file from BTN and return raw bytes."""
+        """Download the .torrent file and return raw bytes."""
         req = urllib.request.Request(
             torrent_url,
             headers={"User-Agent": "StavenMediaManager/1.0"},
