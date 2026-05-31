@@ -862,6 +862,12 @@ const IPTSearch = {
       } else {
         data = await API.get(`/iptorrents/smart-search?q=${enc(q)}&cat=${enc(cat)}&limit=50`);
         data.results.forEach(r => { r._source = 'ipt'; });
+        if (cat === 'movies' && data.results.length) {
+          const mf = _smartMovieFilter(data.results);
+          data.results    = mf.results;
+          data._movieTier = mf.tierLabel;
+          data._moviePre  = mf.totalBefore;
+        }
       }
     } catch (e) {
       el.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`;
@@ -870,18 +876,33 @@ const IPTSearch = {
 
     const { results, query_used, year, attempts } = data;
 
-    // ── Fallback / cascade info bar ──────────────────────────────────────────
+    // ── Movie resolution filter badge ────────────────────────────────────────
     let infoHtml = '';
+    if (data._movieTier) {
+      const tierColor = data._movieTier === '2160p' ? 'text-warning' : 'text-info';
+      infoHtml += `
+        <div class="alert alert-secondary py-2 small mb-2" style="border-color:#444">
+          <i class="bi bi-funnel-fill me-1 ${tierColor}"></i>
+          Filtered to <strong class="${tierColor}">${esc(data._movieTier)}</strong>
+          &nbsp;·&nbsp; sorted by size · deduplicated within 1 GB by seeders
+        </div>`;
+    } else if (cat === 'movies' && results.length) {
+      infoHtml += `
+        <div class="alert alert-secondary py-2 small mb-2" style="border-color:#444">
+          <i class="bi bi-funnel me-1 text-secondary"></i>
+          No 2160p or 1080p results — showing all
+        </div>`;
+    }
     if (attempts.length > 1 && query_used) {
       const tried = attempts.slice(0, -1).map(a => `<code>${esc(a)}</code>`).join(' → ');
-      infoHtml = `
+      infoHtml += `
         <div class="alert alert-secondary py-2 small mb-3" style="border-color:#444">
           <i class="bi bi-funnel me-1 text-info"></i>
           No results for ${tried} — showing results for <strong>${esc(query_used)}</strong>
           ${year ? `<span class="ms-2 badge bg-secondary">year: ${esc(year)}</span>` : ''}
         </div>`;
     } else if (query_used && year) {
-      infoHtml = `<div class="text-secondary small mb-2">
+      infoHtml += `<div class="text-secondary small mb-2">
         <i class="bi bi-calendar3 me-1"></i>Detected year: <span class="badge bg-secondary">${esc(year)}</span>
         — year-matching results sorted first
       </div>`;
@@ -949,6 +970,48 @@ const IPTSearch = {
     }
   },
 };
+
+// ── Smart movie filter ────────────────────────────────────────────────────────
+// Applied when searching movies on IPT.
+// Priority: 2160p → 1080p → all.  Within a resolution tier, sort size
+// ascending then deduplicate: within any 1 GB size cluster keep only the
+// result with the most seeders.
+function _smartMovieFilter(results) {
+  const tiers = [
+    { label: '2160p', re: /\b(2160p|4k|uhd)\b/i },
+    { label: '1080p', re: /\b1080p\b/i },
+  ];
+
+  let filtered = results;
+  let tierLabel = null;
+
+  for (const tier of tiers) {
+    const match = results.filter(r => tier.re.test(r.title));
+    if (match.length) {
+      filtered = match;
+      tierLabel = tier.label;
+      break;
+    }
+  }
+
+  // Sort by size ascending
+  filtered = [...filtered].sort((a, b) => a.size_bytes - b.size_bytes);
+
+  // Deduplicate: within each 1 GB cluster keep the highest-seeder result
+  const GB = 1_000_000_000;
+  const deduped = [];
+  let i = 0;
+  while (i < filtered.length) {
+    const clusterMin = filtered[i].size_bytes;
+    let j = i;
+    while (j < filtered.length && (filtered[j].size_bytes - clusterMin) <= GB) j++;
+    const best = filtered.slice(i, j).reduce((a, b) => b.seeders > a.seeders ? b : a);
+    deduped.push(best);
+    i = j;
+  }
+
+  return { results: deduped, tierLabel, totalBefore: filtered.length };
+}
 
 function _iptTypeIcon(type) {
   const { icon, color } = categoryIcon(type);
