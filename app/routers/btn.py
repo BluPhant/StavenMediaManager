@@ -69,8 +69,10 @@ def btn_search(q: str = "", limit: int = 50):
 # ── Grab ──────────────────────────────────────────────────────────────────────
 
 class GrabRequest(BaseModel):
-    torrent_url: str     # direct .torrent download URL from search response
+    torrent_url: str      # direct .torrent download URL from search response
     label: str = ""
+    title: str = ""           # search result title (reserved for future auto-match)
+    suggested_type: str = ""  # "movies" would trigger auto-match
 
 
 @router.post("/grab", status_code=201)

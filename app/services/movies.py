@@ -124,6 +124,70 @@ def _tmdb_search(query: str, year: int | None, api_key: str) -> list[dict]:
     return results
 
 
+def auto_match_movie(item_name: str, api_key: str, db) -> "MovieMatch | None":
+    """
+    Auto-match a torrent item to TMDB and persist the result.
+
+    Runs at grab time so the match is ready before the sync job downloads the file.
+    Returns the saved MovieMatch, or None if no confident result found.
+
+    Confidence rule: the best TMDB result's normalised title must contain every
+    meaningful word from the cleaned query (ignores short words < 3 chars).
+    """
+    from ..database import SessionLocal
+    from ..models import MovieMatch
+
+    query, year = clean_for_search(item_name)
+    if not query or len(query.split()) < 1:
+        return None
+
+    try:
+        results = search_tmdb(query, year, api_key)
+    except Exception:
+        return None
+
+    if not results:
+        return None
+
+    best = results[0]
+
+    # Confidence check: every meaningful query word must appear in the TMDB title
+    q_words = [w.lower() for w in query.split() if len(w) >= 3]
+    title_lower = best["title"].lower()
+    if q_words and not all(w in title_lower for w in q_words):
+        return None   # ambiguous — leave for manual review
+
+    # Upsert the match
+    _db = db if db is not None else SessionLocal()
+    try:
+        existing = (
+            _db.query(MovieMatch)
+            .filter(MovieMatch.category == "movies", MovieMatch.item_name == item_name)
+            .first()
+        )
+        if existing:
+            return existing          # already matched, don't overwrite
+        record = MovieMatch(
+            category="movies",
+            item_name=item_name,
+            tmdb_id=best["tmdb_id"],
+            formatted_name=best["formatted_name"],
+            year=best["year"],
+            poster_url=best.get("poster_url"),
+            overview=best.get("overview"),
+        )
+        _db.add(record)
+        _db.commit()
+        _db.refresh(record)
+        return record
+    except Exception:
+        _db.rollback()
+        return None
+    finally:
+        if db is None:
+            _db.close()
+
+
 def _get(path: str, params: dict) -> dict:
     url = f"{TMDB_BASE}{path}?{urllib.parse.urlencode(params)}"
     try:

@@ -6,12 +6,16 @@ GET  /api/iptorrents/search?q=&cat=  — search via RSS feed
 POST /api/iptorrents/grab            — fetch .torrent and load into rTorrent
 """
 import logging
+import threading
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..database import get_db
 from ..services.iptorrents import IPTorrentsClient, build_search_cascade
+from ..services.movies import auto_match_movie
 from ..services.sources.rtorrent import RtorrentSource, extract_info_hash
 
 logger = logging.getLogger(__name__)
@@ -127,12 +131,14 @@ def iptorrents_smart_search(q: str = "", cat: str = "all", limit: int = 50):
 
 class GrabRequest(BaseModel):
     torrent_url: str
-    label: str = ""    # rTorrent label; defaults to RTORRENT_TAG if blank
-    force: bool = False  # skip duplicate check
+    label: str = ""           # rTorrent label; defaults to RTORRENT_TAG if blank
+    force: bool = False       # skip duplicate check
+    title: str = ""           # search result title — used for auto TMDB match
+    suggested_type: str = ""  # "movies" triggers auto-match
 
 
 @router.post("/grab", status_code=201)
-def iptorrents_grab(req: GrabRequest):
+def iptorrents_grab(req: GrabRequest, db: Session = Depends(get_db)):
     """
     Fetch the .torrent file from IPTorrents and load it into rTorrent.
     Returns 409 if the torrent is already on the seedbox (same info-hash).
@@ -191,5 +197,18 @@ def iptorrents_grab(req: GrabRequest):
     except Exception as exc:
         logger.error(f"IPT grab rTorrent error: {exc}")
         raise HTTPException(status_code=502, detail=f"Failed to load into rTorrent: {exc}")
+
+    # Auto-match movies to TMDB in the background so the match is ready by the
+    # time the sync job downloads the file (enabling auto-move on sync).
+    if req.suggested_type == "movies" and req.title and settings.tmdb_api_key:
+        torrent_title = req.title.strip()
+        api_key = settings.tmdb_api_key
+        def _do_match():
+            match = auto_match_movie(torrent_title, api_key, None)
+            if match:
+                logger.info(f"Auto-matched '{torrent_title}' → '{match.formatted_name}'")
+            else:
+                logger.info(f"Auto-match: no confident result for '{torrent_title}'")
+        threading.Thread(target=_do_match, daemon=True).start()
 
     return {"status": "ok", "label": label, "size": len(torrent_bytes)}

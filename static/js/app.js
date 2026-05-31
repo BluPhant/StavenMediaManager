@@ -1014,8 +1014,8 @@ const IPTSearch = {
     const label    = window._iptTag || '';
     const endpoint = source === 'btn' ? '/btn/grab' : '/iptorrents/grab';
     const body     = source === 'btn'
-      ? { torrent_url: torrentRef, label }
-      : { torrent_url: torrentRef, label, force };
+      ? { torrent_url: torrentRef, label, title, suggested_type: suggestedType }
+      : { torrent_url: torrentRef, label, force, title, suggested_type: suggestedType };
 
     toast(`Grabbing ${title.slice(0, 50)}…`, 'info');
     try {

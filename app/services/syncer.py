@@ -12,7 +12,7 @@ from datetime import datetime
 
 from ..config import settings
 from ..database import SessionLocal
-from ..models import SyncedItem
+from ..models import Job, MovieMatch, SyncedItem
 from . import job_manager
 from .job_manager import update_job
 from .sources.rtorrent import RtorrentSource
@@ -47,6 +47,46 @@ def _record_synced(source: str, item_id: str, name: str) -> None:
         db.commit()
     except Exception as exc:
         logger.warning(f"Could not record synced item {item_id}: {exc}")
+    finally:
+        db.close()
+
+
+def _auto_move_if_matched(item_name: str, category: str, source_path: str) -> bool:
+    """
+    If a MovieMatch already exists for this item, create and submit a move job.
+    Returns True if a move job was submitted, False otherwise.
+    Called from the sync worker after a successful download.
+    """
+    if category != "movies":
+        return False
+    db = SessionLocal()
+    try:
+        match = (
+            db.query(MovieMatch)
+            .filter(MovieMatch.category == category, MovieMatch.item_name == item_name)
+            .first()
+        )
+        if not match:
+            return False
+        job = Job(
+            type="move",
+            category=category,
+            item_name=item_name,
+            source_path=source_path,
+            status="pending",
+            progress=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_manager.submit_move(job.id, source_path, match.formatted_name, category)
+        logger.info(
+            f"Auto-move queued: '{item_name}' → '{match.formatted_name}' (job {job.id})"
+        )
+        return True
+    except Exception as exc:
+        logger.warning(f"Auto-move setup failed for '{item_name}': {exc}")
+        return False
     finally:
         db.close()
 
@@ -86,8 +126,10 @@ def run_import_by_hash(job_id: int, hash_: str) -> None:
                         cancel_check=lambda: job_manager.is_cancelled(job_id))
         source.mark_done(item)
         _record_synced(source_name, item.id, item.name)
-        update_job(job_id, status="done", progress=100, message=f"Imported: {item.name}")
         logger.info(f"Imported by hash: {item.name} → {dest_dir}")
+        moved = _auto_move_if_matched(item.name, item.suggested_type, dest_dir)
+        msg = f"Imported: {item.name}" + (" — move to library queued." if moved else "")
+        update_job(job_id, status="done", progress=100, message=msg)
     except Exception as exc:
         logger.error(f"Import by hash failed for {hash_}: {exc}", exc_info=True)
         update_job(job_id, status="error", progress=100, message=f"Import failed: {exc}")
@@ -163,6 +205,7 @@ def run_sync(job_id: int) -> None:
             _record_synced(source_name, item.id, item.name)
             downloaded += 1
             logger.info(f"Imported: {item.name} → {dest_dir}")
+            _auto_move_if_matched(item.name, item.suggested_type, dest_dir)
         except Exception as exc:
             logger.error(f"Failed to import {item.name}: {exc}", exc_info=True)
             errors.append(f"{item.name}: {exc}")
