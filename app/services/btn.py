@@ -84,7 +84,7 @@ class BTNClient:
             raise RuntimeError("BTN not configured (BTN_API_KEY missing).")
 
         logger.info(f"BTN search: query={query!r} limit={limit}")
-        result = self._rpc("getTorrentsSearch", settings.btn_api_key, {"search": query}, limit)
+        result = self._rpc("getTorrentsSearch", settings.btn_api_key, {"series": query}, limit)
 
         torrents = (result or {}).get("Torrents") or {}
         if not isinstance(torrents, dict):
