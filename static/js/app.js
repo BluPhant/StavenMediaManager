@@ -14,9 +14,14 @@ const API = {
       body: JSON.stringify(body),
     });
     if (!r.ok) {
-      let msg = await r.text();
-      try { msg = JSON.parse(msg).detail || msg; } catch (_) {}
-      throw new Error(msg);
+      const raw = await r.text();
+      let detail;
+      try { detail = JSON.parse(raw).detail; } catch (_) {}
+      // If detail is an object (e.g. 409 conflict payload), attach it directly
+      const err = new Error(typeof detail === 'string' ? detail : (raw || 'Request failed'));
+      if (detail && typeof detail === 'object') err.detail = detail;
+      err.status = r.status;
+      throw err;
     }
     return r.json();
   },
@@ -1008,15 +1013,9 @@ const IPTSearch = {
       await API.post(endpoint, body);
       toast(`✓ Added to rTorrent — sync when ready to download`, 'success');
     } catch (e) {
-      // 409 = already on seedbox — show conflict modal
-      if (e.message && e.message.includes('"conflict"')) {
-        try {
-          const detail = JSON.parse(e.message);
-          if (detail.conflict) {
-            _showSbxConflict(detail, torrentRef, title, suggestedType, source);
-            return;
-          }
-        } catch (_) {}
+      if (e.status === 409 && e.detail?.conflict) {
+        _showSbxConflict(e.detail);
+        return;
       }
       toast(`Grab failed: ${e.message}`, 'danger');
     }
@@ -1099,25 +1098,34 @@ function _normTitle(s) {
     .trim();
 }
 
-function _showSbxConflict(detail, torrentRef, title, suggestedType, source) {
-  const pct   = detail.pct ?? '?';
+function _showSbxConflict(detail) {
+  const pct   = detail.pct != null ? `${detail.pct}%` : '?%';
   const label = detail.label || '(no label)';
   const id    = 'sbx-conflict-modal';
   document.getElementById(id)?.remove();
   const html = `
     <div class="modal fade" id="${id}" tabindex="-1">
       <div class="modal-dialog">
-        <div class="modal-content bg-dark text-white border-warning">
-          <div class="modal-header border-warning py-2">
-            <h6 class="modal-title mb-0"><i class="bi bi-exclamation-triangle-fill text-warning me-2"></i>Already on Seedbox</h6>
+        <div class="modal-content bg-dark text-white border-info">
+          <div class="modal-header border-info py-2">
+            <h6 class="modal-title mb-0">
+              <i class="bi bi-arrow-down-circle-fill text-info me-2"></i>Already on Seedbox
+            </h6>
             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
           </div>
           <div class="modal-body small">
-            <p class="mb-1"><strong>${esc(detail.name)}</strong></p>
-            <p class="text-secondary mb-0">${pct}% complete &nbsp;·&nbsp; label: <code>${esc(label)}</code></p>
+            <p class="mb-2"><strong>${esc(detail.name)}</strong></p>
+            <p class="text-secondary mb-0">
+              <i class="bi bi-pie-chart me-1"></i>${pct} complete
+              &nbsp;·&nbsp;
+              <i class="bi bi-tag me-1"></i>label: <code class="text-info">${esc(label)}</code>
+            </p>
+            <p class="text-secondary mt-2 mb-0" style="font-size:.8rem">
+              Already downloading — it will be available to sync once complete.
+            </p>
           </div>
           <div class="modal-footer border-secondary py-2">
-            <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+            <button class="btn btn-info btn-sm" data-bs-dismiss="modal">Got it</button>
           </div>
         </div>
       </div>
