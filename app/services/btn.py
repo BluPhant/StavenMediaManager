@@ -34,6 +34,7 @@ class BTNResult:
     source: str          # WEB-DL | HDTV | BluRay | …
     resolution: str      # 1080p | 720p | …
     codec: str           # H.264 | H.265 | …
+    torrent_url: str     # direct .torrent download URL (included in search response)
     info_url: str
     pubdate: str = ""
     extra: dict = field(default_factory=dict)
@@ -84,9 +85,10 @@ class BTNClient:
             raise RuntimeError("BTN not configured (BTN_API_KEY missing).")
 
         logger.info(f"BTN search: query={query!r} limit={limit}")
-        result = self._rpc("getTorrentsSearch", settings.btn_api_key, {"series": query}, limit)
+        result = self._rpc("getTorrentsSearch", settings.btn_api_key, {"series": query}, limit, 0)
 
-        torrents = (result or {}).get("Torrents") or {}
+        # API returns lowercase "torrents"; guard against empty list response too
+        torrents = (result or {}).get("torrents") or {}
         if not isinstance(torrents, dict):
             return []
 
@@ -111,8 +113,9 @@ class BTNClient:
         except (ValueError, TypeError):
             size_bytes = 0
 
-        torrent_id = str(t.get("TorrentID") or tid)
-        info_url = f"https://broadcasthe.net/torrents.php?id={torrent_id}" if torrent_id else ""
+        torrent_id  = str(t.get("TorrentID") or tid)
+        torrent_url = t.get("DownloadURL") or ""
+        info_url    = f"https://broadcasthe.net/torrents.php?id={torrent_id}" if torrent_id else ""
 
         return BTNResult(
             torrent_id=torrent_id,
@@ -125,21 +128,10 @@ class BTNClient:
             source=t.get("Source") or "",
             resolution=t.get("Resolution") or "",
             codec=t.get("Codec") or "",
+            torrent_url=torrent_url,
             info_url=info_url,
             pubdate=str(t.get("Time") or ""),
         )
-
-    # ── Download URL resolution ────────────────────────────────────────────────
-
-    def get_torrent_url(self, torrent_id: str) -> str:
-        """Resolve a BTN torrent ID to a direct .torrent download URL."""
-        logger.info(f"BTN getTorrentsUrl: torrent_id={torrent_id}")
-        result = self._rpc("getTorrentsUrl", settings.btn_api_key, int(torrent_id))
-        if isinstance(result, str):
-            return result
-        if isinstance(result, dict):
-            return result.get("DownloadURL") or result.get("URL") or result.get("download") or ""
-        raise RuntimeError(f"Unexpected getTorrentsUrl response: {result!r}")
 
     # ── Fetch bytes ────────────────────────────────────────────────────────────
 

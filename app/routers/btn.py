@@ -3,7 +3,7 @@ BTN (BroadcasTheNet) API — search and grab torrents.
 
 GET  /api/btn/status           — is BTN configured?
 GET  /api/btn/search?q=&limit= — search via JSON-RPC API
-POST /api/btn/grab             — resolve download URL then load into rTorrent
+POST /api/btn/grab             — fetch .torrent and load into rTorrent
 """
 import logging
 
@@ -34,7 +34,7 @@ def btn_search(q: str = "", limit: int = 50):
     """
     Search BTN via getTorrentsSearch JSON-RPC.
 
-    q     — search term
+    q     — series name to search
     limit — max results (1–100)
     """
     if not _btn.is_configured():
@@ -48,18 +48,19 @@ def btn_search(q: str = "", limit: int = 50):
 
     return [
         {
-            "torrent_id": r.torrent_id,
-            "title":      r.title,
-            "series":     r.series,
-            "size_bytes": r.size_bytes,
-            "seeders":    r.seeders,
-            "leechers":   r.leechers,
-            "category":   r.category,
-            "source":     r.source,
-            "resolution": r.resolution,
-            "codec":      r.codec,
-            "info_url":   r.info_url,
-            "pubdate":    r.pubdate,
+            "torrent_id":  r.torrent_id,
+            "title":       r.title,
+            "series":      r.series,
+            "size_bytes":  r.size_bytes,
+            "seeders":     r.seeders,
+            "leechers":    r.leechers,
+            "category":    r.category,
+            "source":      r.source,
+            "resolution":  r.resolution,
+            "codec":       r.codec,
+            "torrent_url": r.torrent_url,
+            "info_url":    r.info_url,
+            "pubdate":     r.pubdate,
         }
         for r in results
     ]
@@ -68,14 +69,14 @@ def btn_search(q: str = "", limit: int = 50):
 # ── Grab ──────────────────────────────────────────────────────────────────────
 
 class GrabRequest(BaseModel):
-    torrent_id: str          # BTN torrent ID — URL is resolved via getTorrentsUrl
+    torrent_url: str     # direct .torrent download URL from search response
     label: str = ""
 
 
 @router.post("/grab", status_code=201)
 def btn_grab(req: GrabRequest):
     """
-    Resolve the .torrent download URL from BTN then load it into rTorrent.
+    Fetch the .torrent file from BTN and load it into rTorrent.
     """
     if not _btn.is_configured():
         raise HTTPException(status_code=400, detail="BTN not configured. Set BTN_API_KEY.")
@@ -86,26 +87,13 @@ def btn_grab(req: GrabRequest):
 
     label = req.label.strip() or settings.rtorrent_tag
 
-    # 1. Resolve download URL from torrent ID
-    logger.info(f"BTN grab: resolving URL for torrent_id={req.torrent_id}")
+    logger.info(f"BTN grab: fetching {req.torrent_url[:80]}…")
     try:
-        torrent_url = _btn.get_torrent_url(req.torrent_id)
-    except Exception as exc:
-        logger.error(f"BTN getTorrentsUrl error: {exc}")
-        raise HTTPException(status_code=502, detail=f"Failed to resolve download URL: {exc}")
-
-    if not torrent_url:
-        raise HTTPException(status_code=502, detail="BTN returned an empty download URL.")
-
-    # 2. Download .torrent bytes
-    logger.info(f"BTN grab: fetching torrent from {torrent_url[:80]}…")
-    try:
-        torrent_bytes = _btn.fetch_torrent_bytes(torrent_url)
+        torrent_bytes = _btn.fetch_torrent_bytes(req.torrent_url)
     except Exception as exc:
         logger.error(f"BTN grab fetch error: {exc}")
         raise HTTPException(status_code=502, detail=f"Failed to fetch .torrent: {exc}")
 
-    # 3. Load into rTorrent
     logger.info(f"BTN grab: loading {len(torrent_bytes)} bytes into rTorrent (label={label!r})")
     try:
         rt.load_torrent(torrent_bytes, label=label)
