@@ -68,6 +68,14 @@ def submit_sync(job_id: int) -> None:
     _executor.submit(_guarded, job_id, run_sync)
 
 
+def submit_import(job_id: int, hash_: str) -> None:
+    from ..services.syncer import run_import_by_hash
+
+    _register(job_id)
+    update_job(job_id, status="running", progress=0)
+    _executor.submit(_guarded, job_id, run_import_by_hash, hash_)
+
+
 def _guarded(job_id: int, func, *args) -> None:
     try:
         func(job_id, *args)

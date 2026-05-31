@@ -346,6 +346,41 @@ class RtorrentSource(BaseSource):
         except Exception as exc:
             raise RuntimeError(f"rTorrent load.raw_start failed: {exc}") from exc
 
+    def get_item_by_hash(self, hash_: str) -> "SourceItem":
+        """
+        Return a SourceItem for a specific torrent hash, regardless of label.
+        Raises ValueError if the torrent is not complete.
+        """
+        proxy  = self._proxy()
+        hash_  = hash_.upper()
+        name      = proxy.d.name(hash_)
+        directory = proxy.d.directory(hash_)
+        is_multi  = bool(proxy.d.is_multi_file(hash_))
+        size      = int(proxy.d.size_bytes(hash_))
+        label     = proxy.d.custom1(hash_)
+        complete  = bool(proxy.d.complete(hash_))
+
+        if not complete:
+            done = int(proxy.d.completed_bytes(hash_))
+            pct  = round(done / max(size, 1) * 100, 1)
+            raise ValueError(f"Torrent is not complete ({pct}%)")
+
+        try:
+            file_rows = proxy.f.multicall(hash_, "", "f.path=")
+            file_list = [r[0] for r in file_rows]
+        except Exception:
+            file_list = [name]
+
+        remote_path = directory if is_multi else os.path.join(directory, name)
+        return SourceItem(
+            id=hash_,
+            name=name,
+            remote_path=remote_path,
+            suggested_type=detect_type(label, file_list),
+            size_bytes=size,
+            metadata={"label": label, "files": file_list, "is_multi": bool(is_multi)},
+        )
+
     def list_all_brief(self) -> dict[str, dict]:
         """
         Return every torrent currently in rTorrent as {HASH: {name, label, pct}}.

@@ -1099,10 +1099,18 @@ function _normTitle(s) {
 }
 
 function _showSbxConflict(detail) {
-  const pct   = detail.pct != null ? `${detail.pct}%` : '?%';
-  const label = detail.label || '(no label)';
-  const id    = 'sbx-conflict-modal';
+  const pct      = detail.pct != null ? detail.pct : null;
+  const pctStr   = pct != null ? `${pct}%` : '?%';
+  const label    = detail.label || '(no label)';
+  const complete = pct != null && pct >= 100;
+  const id       = 'sbx-conflict-modal';
   document.getElementById(id)?.remove();
+
+  const importBtn = complete ? `
+    <button class="btn btn-success btn-sm" id="sbx-import-btn">
+      <i class="bi bi-box-arrow-in-down me-1"></i>Import Now
+    </button>` : '';
+
   const html = `
     <div class="modal fade" id="${id}" tabindex="-1">
       <div class="modal-dialog">
@@ -1116,23 +1124,43 @@ function _showSbxConflict(detail) {
           <div class="modal-body small">
             <p class="mb-2"><strong>${esc(detail.name)}</strong></p>
             <p class="text-secondary mb-0">
-              <i class="bi bi-pie-chart me-1"></i>${pct} complete
+              <i class="bi bi-pie-chart me-1"></i>${pctStr} complete
               &nbsp;·&nbsp;
               <i class="bi bi-tag me-1"></i>label: <code class="text-info">${esc(label)}</code>
             </p>
             <p class="text-secondary mt-2 mb-0" style="font-size:.8rem">
-              Already downloading — it will be available to sync once complete.
+              ${complete
+                ? 'Complete — click Import Now to download to your library.'
+                : 'Still downloading — it will be available once complete.'}
             </p>
           </div>
           <div class="modal-footer border-secondary py-2">
-            <button class="btn btn-info btn-sm" data-bs-dismiss="modal">Got it</button>
+            ${importBtn}
+            <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Dismiss</button>
           </div>
         </div>
       </div>
     </div>`;
+
   document.getElementById('app').insertAdjacentHTML('beforeend', html);
-  const modal = new bootstrap.Modal(document.getElementById(id));
-  document.getElementById(id).addEventListener('hidden.bs.modal', e => e.target.remove());
+  const modalEl = document.getElementById(id);
+  const modal   = new bootstrap.Modal(modalEl);
+  modalEl.addEventListener('hidden.bs.modal', e => e.target.remove());
+
+  if (complete) {
+    modalEl.querySelector('#sbx-import-btn').addEventListener('click', async () => {
+      modal.hide();
+      try {
+        const job = await API.post(`/sources/import/${encodeURIComponent(detail.hash)}`, {});
+        JobPoller.track(job.id, { type: 'sync' });
+        JobsPanel.open();
+        toast(`Importing ${detail.name.slice(0, 50)}…`, 'info');
+      } catch (e) {
+        toast(`Import failed: ${e.message}`, 'danger');
+      }
+    });
+  }
+
   modal.show();
 }
 

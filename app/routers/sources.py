@@ -87,6 +87,29 @@ def stop_torrent(hash_: str):
     return {"status": "stopped", "hash": hash_}
 
 
+@router.post("/import/{hash_}", status_code=201)
+def import_by_hash(hash_: str, db: Session = Depends(get_db)):
+    """Import a specific torrent by hash, bypassing label and lookback filters."""
+    rt = RtorrentSource()
+    if not rt.is_configured():
+        raise HTTPException(status_code=400, detail="rTorrent source not configured.")
+
+    job = Job(
+        type="sync",
+        category="",
+        item_name=f"Import {hash_[:8]}…",
+        source_path="",
+        status="pending",
+        progress=0,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    job_manager.submit_import(job.id, hash_.upper())
+    return job
+
+
 @router.get("/brief")
 def sources_brief():
     """Return all seedbox torrents as {hash: {name, label, pct}} — for duplicate detection."""

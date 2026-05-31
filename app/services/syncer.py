@@ -51,6 +51,48 @@ def _record_synced(source: str, item_id: str, name: str) -> None:
         db.close()
 
 
+def run_import_by_hash(job_id: int, hash_: str) -> None:
+    """Import a single torrent by hash, bypassing label and lookback filters."""
+    update_job(job_id, status="running", progress=2, message="Fetching torrent info from seedbox…")
+
+    sources = _get_sources()
+    if not sources:
+        update_job(job_id, status="error", message="No sources configured.")
+        return
+
+    source_name, source = sources[0]
+
+    try:
+        item = source.get_item_by_hash(hash_)
+    except Exception as exc:
+        update_job(job_id, status="error", message=f"Could not get torrent info: {exc}")
+        return
+
+    synced_ids = _get_synced_ids(source_name)
+    if hash_ in synced_ids:
+        update_job(job_id, status="done", progress=100, message=f"Already imported: {item.name}")
+        return
+
+    dest_dir = os.path.join(settings.incoming_dir, item.suggested_type, item.name)
+    update_job(job_id, progress=5, message=f"{item.name} → {item.suggested_type}/")
+
+    def _progress(pct: int, filename: str, mbps: float = 0.0) -> None:
+        speed_str = f" @ {mbps:.1f} MB/s" if mbps > 0 else ""
+        update_job(job_id, progress=5 + int(pct * 0.9),
+                   message=f"{item.name} / {filename} {pct}%{speed_str}")
+
+    try:
+        source.download(item, dest_dir, progress_cb=_progress,
+                        cancel_check=lambda: job_manager.is_cancelled(job_id))
+        source.mark_done(item)
+        _record_synced(source_name, item.id, item.name)
+        update_job(job_id, status="done", progress=100, message=f"Imported: {item.name}")
+        logger.info(f"Imported by hash: {item.name} → {dest_dir}")
+    except Exception as exc:
+        logger.error(f"Import by hash failed for {hash_}: {exc}", exc_info=True)
+        update_job(job_id, status="error", progress=100, message=f"Import failed: {exc}")
+
+
 def run_sync(job_id: int) -> None:
     """Main sync worker — runs in a background thread via job_manager."""
     update_job(job_id, status="running", progress=2, message="Connecting to sources...")
