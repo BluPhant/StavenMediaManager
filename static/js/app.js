@@ -997,7 +997,8 @@ const IPTSearch = {
         </table>
       </div>`;
 
-    // Async SBX dupe check — badges rows already on seedbox (non-blocking)
+    // Async checks — library presence + seedbox dupes (both non-blocking)
+    this._checkLibrary(this._lastQuery);
     this._checkSbxDupes();
   },
 
@@ -1021,20 +1022,183 @@ const IPTSearch = {
     }
   },
 
-  // Called after search results render — badges rows already on seedbox by name
+  // ── Library check — is this title already on the local server? ──────────────
+  async _checkLibrary(q) {
+    if (!q) return;
+    let hits;
+    try { hits = await API.get(`/library/search?q=${enc(q)}`); } catch (_) { return; }
+    if (!hits || !hits.length) return;
+    const el = document.getElementById('ipt-results');
+    if (!el) return;
+    const fileList = hits.slice(0, 3).map(h => `<code>${esc(h.filename)}</code>`).join(', ');
+    const more = hits.length > 3 ? ` <span class="text-secondary">+${hits.length - 3} more</span>` : '';
+    el.insertAdjacentHTML('afterbegin', `
+      <div class="alert alert-success py-2 small mb-2"
+           style="border-color:#28a745;background:rgba(40,167,69,.1)">
+        <i class="bi bi-check-circle-fill me-1 text-success"></i>
+        <strong>${esc(q)}</strong> is already in your library — ${fileList}${more}
+      </div>`);
+  },
+
+  // ── Seedbox dupe check — badges results; in movie mode applies tier logic ────
   async _checkSbxDupes() {
     let brief;
     try { brief = await API.get('/sources/brief'); } catch (_) { return; }
-    // Build a normalised name set from seedbox
-    const sbxNames = Object.values(brief).map(t => _normTitle(t.name));
+
+    // Build normalised sbx entries (now includes size_bytes from API)
+    const sbxEntries = Object.entries(brief).map(([hash, t]) => ({
+      hash,
+      name:       t.name,
+      label:      t.label,
+      pct:        t.pct,
+      size_bytes: t.size_bytes,
+      norm:       _normTitle(t.name),
+    }));
+
+    // Badge all DOM result rows that match a seedbox entry by title
     document.querySelectorAll('[data-result-title]').forEach(row => {
       const norm = _normTitle(row.dataset.resultTitle);
-      const hit  = sbxNames.some(n => n && norm && (n.includes(norm) || norm.includes(n)));
+      const hit  = sbxEntries.find(s => s.norm && norm && (s.norm.includes(norm) || norm.includes(s.norm)));
       if (hit) {
         const badge = row.querySelector('.sbx-badge');
         if (badge) { badge.textContent = 'On SBX'; badge.className = 'sbx-badge badge bg-warning text-dark ms-1'; }
       }
     });
+
+    // ── Movie-specific tier logic ────────────────────────────────────────────
+    const [, cat] = (this._lastCat || 'ipt:all').split(':');
+    if (cat !== 'movies') return;
+
+    // Match sbx items against the search query (catches releases not in results)
+    const queryWords = _normTitle(this._lastQuery || '').split(' ').filter(w => w.length >= 2);
+    if (!queryWords.length) return;
+
+    const sbxMovieMatches = sbxEntries.filter(s =>
+      s.norm && queryWords.every(w => s.norm.includes(w))
+    );
+    if (!sbxMovieMatches.length) return;
+
+    // Pick the highest-resolution sbx match
+    const _TIER_2160 = /\b(2160p|4k|uhd)\b/i;
+    const _TIER_1080 = /\b1080p\b/i;
+    const tierRank   = name => _TIER_2160.test(name) ? 2 : _TIER_1080.test(name) ? 1 : 0;
+    sbxMovieMatches.sort((a, b) => tierRank(b.name) - tierRank(a.name));
+    const best      = sbxMovieMatches[0];
+    const rank      = tierRank(best.name);
+    const tierLabel = rank === 2 ? '2160p' : rank === 1 ? '1080p' : null;
+
+    const el = document.getElementById('ipt-results');
+    if (!el) return;
+
+    // Helper: build an Import button (or % text) for synthetic sbx rows
+    const _sbxActionCell = (b) => b.pct >= 100
+      ? `<button class="btn btn-sm btn-outline-success"
+                 onclick="IPTSearch._importSbxHash('${esc(b.hash)}', ${jsStr(b.name)})">
+           <i class="bi bi-box-arrow-in-down me-1"></i>Import
+         </button>`
+      : `<span class="text-secondary small">${b.pct != null ? b.pct + '%' : ''}</span>`;
+
+    if (tierLabel) {
+      // ── Good quality (2160p or 1080p) on sbx → show only that release ──────
+      const tierColor = tierLabel === '2160p' ? 'text-warning' : 'text-info';
+      const allRows   = [...document.querySelectorAll('[data-result-title]')];
+      const sbxNorm   = best.norm;
+      const matchRow  = allRows.find(row => {
+        const rn = _normTitle(row.dataset.resultTitle);
+        return rn && sbxNorm && (sbxNorm.includes(rn) || rn.includes(sbxNorm));
+      });
+
+      // Hide all rows except the matching one (if found in search results)
+      allRows.forEach(row => { if (row !== matchRow) row.style.display = 'none'; });
+
+      // If the sbx release wasn't in the search results at all, inject a synthetic row
+      if (!matchRow) {
+        const tbody = el.querySelector('tbody');
+        if (tbody) {
+          const sz     = best.size_bytes ? _humanSize(best.size_bytes) : '?';
+          const pctStr = best.pct != null ? ` · ${best.pct}%` : '';
+          tbody.insertAdjacentHTML('afterbegin', `
+            <tr data-result-title="${esc(best.name)}" class="table-warning bg-opacity-25">
+              <td>
+                <div class="fw-semibold lh-sm">${esc(best.name)}
+                  <span class="badge bg-warning text-dark ms-1">On SBX</span>
+                </div>
+                <div class="text-secondary" style="font-size:.75rem">
+                  Seedbox · label: ${esc(best.label || '(none)')}${pctStr}
+                </div>
+              </td>
+              <td class="text-nowrap text-secondary small">${sz}</td>
+              <td class="text-nowrap small"><span class="text-secondary">—</span></td>
+              <td><span class="badge bg-secondary">movie</span></td>
+              <td>${_sbxActionCell(best)}</td>
+            </tr>`);
+        }
+      }
+
+      el.insertAdjacentHTML('afterbegin', `
+        <div class="alert alert-warning py-2 small mb-2" id="sbx-tier-note"
+             style="border-color:#f0ad4e;background:rgba(240,173,78,.1)">
+          <i class="bi bi-hdd-network me-1 ${tierColor}"></i>
+          Already on seedbox in <strong class="${tierColor}">${tierLabel}</strong> — showing only that version.
+          <button class="btn btn-link btn-sm text-secondary p-0 ms-2" style="font-size:.75rem"
+                  onclick="IPTSearch._showAllSbxResults()">Show all options</button>
+        </div>`);
+
+    } else {
+      // ── Below threshold (720p / unknown) → keep all results + add sbx item ──
+      const sbxNorm      = best.norm;
+      const alreadyShown = [...document.querySelectorAll('[data-result-title]')].some(row => {
+        const rn = _normTitle(row.dataset.resultTitle);
+        return rn && sbxNorm && (sbxNorm.includes(rn) || rn.includes(sbxNorm));
+      });
+
+      if (!alreadyShown) {
+        const tbody = el.querySelector('tbody');
+        if (tbody) {
+          const sz     = best.size_bytes ? _humanSize(best.size_bytes) : '?';
+          const pctStr = best.pct != null ? ` · ${best.pct}%` : '';
+          tbody.insertAdjacentHTML('afterbegin', `
+            <tr data-result-title="${esc(best.name)}">
+              <td>
+                <div class="fw-semibold lh-sm text-secondary">${esc(best.name)}
+                  <span class="badge bg-warning text-dark ms-1">On SBX</span>
+                </div>
+                <div class="text-secondary" style="font-size:.75rem">
+                  Seedbox · label: ${esc(best.label || '(none)')}${pctStr}
+                </div>
+              </td>
+              <td class="text-nowrap text-secondary small">${sz}</td>
+              <td class="text-nowrap small"><span class="text-secondary">—</span></td>
+              <td><span class="badge bg-secondary">movie</span></td>
+              <td>${_sbxActionCell(best)}</td>
+            </tr>`);
+        }
+      }
+
+      el.insertAdjacentHTML('afterbegin', `
+        <div class="alert alert-secondary py-2 small mb-2" style="border-color:#666">
+          <i class="bi bi-exclamation-triangle me-1 text-warning"></i>
+          A lower quality version is already on the seedbox — better options shown below.
+        </div>`);
+    }
+  },
+
+  // Restore all hidden rows and remove the sbx-tier banner
+  _showAllSbxResults() {
+    document.getElementById('sbx-tier-note')?.remove();
+    document.querySelectorAll('[data-result-title]').forEach(row => { row.style.display = ''; });
+  },
+
+  // Import a seedbox torrent by hash (used by synthetic sbx rows)
+  async _importSbxHash(hash, name) {
+    try {
+      const job = await API.post(`/sources/import/${encodeURIComponent(hash)}`, {});
+      JobPoller.track(job.id, { type: 'sync' });
+      JobsPanel.open();
+      toast(`Importing ${name.slice(0, 50)}…`, 'info');
+    } catch (e) {
+      toast(`Import failed: ${e.message}`, 'danger');
+    }
   },
 };
 

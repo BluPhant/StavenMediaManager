@@ -398,7 +398,7 @@ class RtorrentSource(BaseSource):
         for row in rows:
             hash_, name, label, done, total = row
             pct = round(done / max(total, 1) * 100, 1)
-            result[hash_.upper()] = {"name": name, "label": label, "pct": pct}
+            result[hash_.upper()] = {"name": name, "label": label, "pct": pct, "size_bytes": int(total)}
         return result
 
     def stop_torrent(self, hash_: str) -> None:
