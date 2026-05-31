@@ -4,7 +4,11 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    incoming_dir: str = "/incoming"
+    # Both paths must be under the same Docker volume mount so os.rename() works
+    # (cross-mount-point renames fail with EXDEV and force a full file copy).
+    # Default: /media/temp/Incoming — subdirectory of the /media mount.
+    # Override with INCOMING_DIR env var if needed.
+    incoming_dir: str = "/media/temp/Incoming"
     media_dir: str = "/media"
     # Mounted appdata volume — holds the SQLite DB and any future config files
     config_dir: str = "/config"
