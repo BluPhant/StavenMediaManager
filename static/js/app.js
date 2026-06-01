@@ -1596,9 +1596,11 @@ const MovieDiscover = {
       const badge = card?.querySelector('.plex-badge');
       if (!badge) return;
       if (s.found) {
-        const atTarget = s.resolution_rank >= 4;
-        const cls      = atTarget ? 'bg-success' : 'bg-warning text-dark';
-        const icon     = atTarget ? '🟢' : '🔵';
+        const rank     = s.resolution_rank ?? -1;
+        const cls      = rank >= 4 ? 'bg-success'
+                       : rank >= 2 ? 'bg-warning text-dark'
+                       :             'bg-danger';
+        const icon     = rank >= 4 ? '🟢' : rank >= 2 ? '🟡' : '🔴';
         const resLabel = s.resolution ? ` · ${esc(s.resolution)}` : '';
         badge.innerHTML = `<span class="badge ${cls}" style="font-size:.65rem">
           ${icon} In Plex${resLabel}
