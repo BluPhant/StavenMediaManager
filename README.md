@@ -8,15 +8,14 @@ A personal home-media management tool I built for my own Unraid setup and am mak
 
 ## What it does
 
-- **Movie discovery** — Search by title, identify the movie via TMDB (IMDB ID as the internal key), then check Plex, your seedbox, and IPTorrents in parallel. Shows a unified status card: already in library (at what resolution), currently downloading, or available to grab. Quality tiers: 2160p → 1440p → 1080p → 720p. If a movie is in your library below 2160p, surfaces better copies automatically.
-- **Upgrade reviews** — When a better copy of a movie is grabbed, the old file is moved to a `.trash` folder and a Pending Review is created. Side-by-side comparison of old vs new (filename, size, resolution) with Confirm or Revert actions.
-- **Watching queue** — Add movies that aren't on IPT yet to a queue. A background job checks every 4 hours and auto-grabs when a copy meeting your minimum quality appears.
-- **Search history** — Every confirmed movie search is recorded with Plex/seedbox/IPT status. One-click refresh re-runs all checks live.
+- **Movie discovery** — Search by title; candidate cards show lazy-loaded Plex status badges (🟢 2160p · 🟡 1080p · 🔴 720p). Select a movie and the app checks Plex, your seedbox, and IPTorrents simultaneously using the IMDB ID as the single key. Results are scored by quality tier, file size fit (~15 GB ideal for a 2-hour 2160p film), source type, and seed count — with CAM/TS/Screener releases excluded. If the movie is already in your library below 2160p, only upgrade-quality results are shown. Grabbing or queuing a movie navigates to the home screen with the Jobs panel open.
+- **Upgrade reviews** — When a better copy replaces an existing one, the old file moves to `.trash/`. A Pending Review card shows old vs new side-by-side (filename, size, resolution) with Confirm (delete old) or Revert (restore old) actions. A nav badge tracks pending reviews.
+- **Watching queue** — Add movies that aren't on IPT yet. An immediate check job fires on queue; a background scheduler re-checks every 4 hours and auto-grabs when a copy at your minimum quality appears.
+- **Search history** — Every confirmed movie search is recorded with Plex/seedbox/IPT status cached. One-click refresh re-runs all checks live.
 - **Seedbox sync** — Polls an rTorrent seedbox for completed torrents tagged with a label, downloads them over FTPS (parallel byte-range segments), and moves them into the local media library.
-- **IPTorrents search** — Search the IPTorrents RSS feed by title or IMDB ID, grab a torrent, and load it directly into rTorrent with one click.
-- **BTN search** — Search BroadcasTheNet for TV series, grab and load into rTorrent.
-- **Plex integration** — Targeted path refresh after each import; full library scan with resolution data cached for movie status checks.
-- **Job tracking** — All sync, move, extract, and queue-check jobs are tracked in a local SQLite database with live progress in the UI.
+- **TV / general search** — Search IPTorrents (TV, music, audiobooks, games, etc.) or BroadcasTheNet for TV. Grab and load directly into rTorrent.
+- **Plex integration** — Full library scan with IMDB ID and resolution data, 60-second cache, targeted path refresh after every move.
+- **Job tracking** — All jobs (sync, move, extract, queue-check, upgrade-check) are tracked in SQLite with live progress in the UI.
 
 ---
 
