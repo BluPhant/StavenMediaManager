@@ -133,7 +133,7 @@ def _get_library() -> dict[str, dict]:
     try:
         url = (
             f"{settings.plex_url.rstrip('/')}/library/sections/{sid}/all"
-            f"?type=1&X-Plex-Token={settings.plex_token}"
+            f"?type=1&includeGuids=1&X-Plex-Token={settings.plex_token}"
         )
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
