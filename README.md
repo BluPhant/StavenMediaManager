@@ -8,11 +8,15 @@ A personal home-media management tool I built for my own Unraid setup and am mak
 
 ## What it does
 
-- **Seedbox sync** — polls an rTorrent seedbox for completed torrents tagged with a label, downloads them over FTPS (parallel byte-range segments), and moves them into a local media library organised by category.
-- **IPTorrents search** — search the IPTorrents RSS feed by title, grab a torrent, and load it directly into rTorrent with one click.
-- **Movie matching** — suggests a clean title + year for movie directories using the TMDb API, with progressive query broadening so obscure and older titles still surface.
-- **Plex integration** — triggers a Plex library refresh after each import.
-- **Job tracking** — all sync and extract jobs are tracked in a local SQLite database with live progress in the UI.
+- **Movie discovery** — Search by title, identify the movie via TMDB (IMDB ID as the internal key), then check Plex, your seedbox, and IPTorrents in parallel. Shows a unified status card: already in library (at what resolution), currently downloading, or available to grab. Quality tiers: 2160p → 1440p → 1080p → 720p. If a movie is in your library below 2160p, surfaces better copies automatically.
+- **Upgrade reviews** — When a better copy of a movie is grabbed, the old file is moved to a `.trash` folder and a Pending Review is created. Side-by-side comparison of old vs new (filename, size, resolution) with Confirm or Revert actions.
+- **Watching queue** — Add movies that aren't on IPT yet to a queue. A background job checks every 4 hours and auto-grabs when a copy meeting your minimum quality appears.
+- **Search history** — Every confirmed movie search is recorded with Plex/seedbox/IPT status. One-click refresh re-runs all checks live.
+- **Seedbox sync** — Polls an rTorrent seedbox for completed torrents tagged with a label, downloads them over FTPS (parallel byte-range segments), and moves them into the local media library.
+- **IPTorrents search** — Search the IPTorrents RSS feed by title or IMDB ID, grab a torrent, and load it directly into rTorrent with one click.
+- **BTN search** — Search BroadcasTheNet for TV series, grab and load into rTorrent.
+- **Plex integration** — Targeted path refresh after each import; full library scan with resolution data cached for movie status checks.
+- **Job tracking** — All sync, move, extract, and queue-check jobs are tracked in a local SQLite database with live progress in the UI.
 
 ---
 
@@ -22,8 +26,7 @@ A personal home-media management tool I built for my own Unraid setup and am mak
 |---|---|
 | Backend | Python 3.11, FastAPI |
 | Database | SQLite via SQLAlchemy |
-| Scheduling | APScheduler |
-| Seedbox protocol | rTorrent XMLRPC, FTPS (curl), SFTP (paramiko) |
+| Seedbox protocol | rTorrent XMLRPC, FTPS (curl), SFTP |
 | Frontend | Vanilla JS SPA, Bootstrap 5, no build step |
 | Container | Docker (single image) |
 | CI | GitHub Actions → `ghcr.io` |
@@ -41,14 +44,17 @@ docker run -d \
   --name StavenMediaManager \
   --restart unless-stopped \
   -p 8080:8080 \
-  -v /path/to/incoming:/incoming \
   -v /path/to/media:/media \
   -v /path/to/appdata:/config \
   -e TMDB_API_KEY=your_key \
+  -e PLEX_URL=http://192.168.1.x:32400 \
+  -e PLEX_TOKEN=your_plex_token \
   ghcr.io/bluphant/stavenmediamanager:latest
 ```
 
 The app will be available at `http://localhost:8080`.
+
+> **Note:** A single `/media` mount covers both incoming downloads and the library. Incoming files land at `/media/temp/Incoming` by default. Do **not** add a separate `/incoming` mount — it would cause full file copies instead of instant renames.
 
 ### Docker Compose
 
@@ -61,11 +67,12 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - /path/to/incoming:/incoming
       - /path/to/media:/media
       - /path/to/appdata:/config
     environment:
       - TMDB_API_KEY=your_key
+      - PLEX_URL=http://192.168.1.x:32400
+      - PLEX_TOKEN=your_plex_token
 ```
 
 ---
@@ -79,8 +86,9 @@ All configuration is via environment variables. Nothing is stored in the image.
 | Variable | Default | Description |
 |---|---|---|
 | `TMDB_API_KEY` | — | Free API key from [themoviedb.org](https://www.themoviedb.org/settings/api) |
+| `INCOMING_DIR` | `/media/temp/Incoming` | Where torrents are downloaded before sorting. Must be under the `/media` mount. |
 
-### Plex (optional)
+### Plex (optional — required for movie status checks)
 
 | Variable | Default | Description |
 |---|---|---|
@@ -114,21 +122,28 @@ All configuration is via environment variables. Nothing is stored in the image.
 | `IPTORRENTS_PASSKEY` | — | Passkey / API key from your IPT profile |
 | `IPTORRENTS_DOMAIN` | `iptorrents.com` | Domain override if needed |
 
+### BTN (BroadcasTheNet) search (optional)
+
+| Variable | Default | Description |
+|---|---|---|
+| `BTN_API_KEY` | — | API key from your BTN profile → Manage API Keys |
+
 ---
 
 ## Volumes
 
 | Mount | Purpose |
 |---|---|
-| `/incoming` | Where torrents are downloaded before being sorted |
-| `/media` | Your media library root — subdirectories become categories |
+| `/media` | Your media library root — subdirectories become categories. Incoming files land at `/media/temp/Incoming`. |
 | `/config` | Persistent data: SQLite database, optional SSH keys |
 
 ---
 
 ## Notes
 
-- The seedbox sync uses **FTPS** (FTP over TLS) rather than SFTP for download throughput; SFTP is used only for directory listing.
+- The seedbox sync uses **FTPS** (FTP over TLS) rather than SFTP for download throughput.
 - Category detection is driven by the subdirectory structure under `/media` — create a folder called `movies`, `audiobooks`, etc. and the UI picks it up automatically.
-- This was built and tested against an **Ultra Seedbox** (usbx.me) setup. Other providers should work but YMMV.
+- Movie upgrades: when a better copy is imported over an existing one, the old file moves to `/media/movies/.trash/` pending a review in the **Movies → Pending Review** tab.
+- Plex is the system of record for local media. The movie tracking tables in this app store workflow state only — what you searched, what's downloading, what needs a review.
 - No authentication on the web UI — intended for use on a private LAN or behind a VPN.
+- Built and tested against an **Ultra Seedbox** (usbx.me) setup. Other rTorrent providers should work but YMMV.
