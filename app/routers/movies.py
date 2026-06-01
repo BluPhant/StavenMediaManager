@@ -86,6 +86,29 @@ def search_movies(q: str = Query(..., min_length=1), year: int | None = None):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@router.get("/plex-check")
+def plex_check_single(tmdb_id: int):
+    """
+    Lightweight Plex status check for one TMDB ID.
+    Used for lazy-loading badges on search-result cards.
+    Makes one TMDB call to resolve the IMDB ID, then checks the in-memory
+    Plex library cache (loaded once and shared across all calls).
+    """
+    if not settings.tmdb_api_key:
+        return {"found": False, "resolution": None, "imdb_id": None, "resolution_rank": -1}
+    details = get_tmdb_details(tmdb_id, settings.tmdb_api_key)
+    if not details or not details.get("imdb_id"):
+        return {"found": False, "resolution": None, "imdb_id": None, "resolution_rank": -1}
+    imdb_id   = details["imdb_id"]
+    plex_info = plex_svc.check_movie(imdb_id)
+    return {
+        "imdb_id":         imdb_id,
+        "found":           plex_info.get("found", False),
+        "resolution":      plex_info.get("resolution"),
+        "resolution_rank": plex_info.get("resolution_rank", -1),
+    }
+
+
 @router.post("/confirm")
 def confirm_movie(req: ConfirmRequest, db: Session = Depends(get_db)):
     """

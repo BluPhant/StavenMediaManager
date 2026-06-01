@@ -1352,6 +1352,8 @@ const MovieDiscover = {
   _searchResults: [],      // TMDB candidates from /movies/search
   _confirmed: null,        // full confirm response (plex/sbx/ipt/status)
   _grabbing: false,
+  _plexCheckToken: null,   // cancel token for lazy Plex badge loading
+  _showAllQualities: false,
 
   async render(tab) {
     this._tab = tab || this._tab || 'search';
@@ -1408,7 +1410,10 @@ const MovieDiscover = {
   async search() {
     const q = document.getElementById('movie-search-input')?.value?.trim();
     if (!q) return;
+    // Cancel any running Plex badge checks from previous search
+    this._plexCheckToken = null;
     this._confirmed = null;
+    this._showAllQualities = false;
     document.getElementById('movie-confirm-panel').innerHTML = '';
     const res = document.getElementById('movie-search-results');
     res.innerHTML = '<div class="text-secondary small py-2"><div class="spinner-border spinner-border-sm me-2"></div>Searching…</div>';
@@ -1427,6 +1432,7 @@ const MovieDiscover = {
         ${this._searchResults.map((r, i) => `
           <div class="col-6 col-md-4 col-lg-3">
             <div class="card h-100 border-secondary movie-candidate-card"
+                 data-tmdb-id="${r.tmdb_id}"
                  onclick="MovieDiscover.confirm(${i})" style="cursor:pointer">
               ${r.poster_url
                 ? `<img src="${esc(r.poster_url)}" class="card-img-top"
@@ -1436,15 +1442,23 @@ const MovieDiscover = {
               <div class="card-body p-2">
                 <div class="fw-semibold small">${esc(r.title)}</div>
                 <div class="text-secondary small">${r.year || ''}</div>
+                <div class="plex-badge mt-1">
+                  <span class="spinner-grow spinner-grow-sm text-secondary"
+                        style="width:.5rem;height:.5rem" role="status"></span>
+                </div>
               </div>
             </div>
           </div>`).join('')}
       </div>`;
+
+    // Start lazy Plex status checks (batches of 3, cancellable)
+    this._lazyPlexCheck(this._searchResults);
   },
 
   async confirm(idx) {
     const candidate = this._searchResults[idx];
     if (!candidate) return;
+    this._plexCheckToken = null;   // cancel any running badge checks
     this._showAllQualities = false;
     const panel = document.getElementById('movie-confirm-panel');
     panel.innerHTML = '<div class="text-secondary small py-3"><div class="spinner-border spinner-border-sm me-2"></div>Checking all systems…</div>';
@@ -1562,7 +1576,42 @@ const MovieDiscover = {
     }
   },
 
-  _showAllQualities: false,
+  // ── Lazy Plex badge loading ───────────────────────────────────────────────────
+  async _lazyPlexCheck(results) {
+    const token = Symbol();
+    this._plexCheckToken = token;
+    const BATCH = 3;
+    for (let i = 0; i < results.length; i += BATCH) {
+      if (this._plexCheckToken !== token) return;  // cancelled by new search/confirm
+      const batch = results.slice(i, i + BATCH);
+      await Promise.all(batch.map(r => this._plexBadgeOne(r.tmdb_id, token)));
+    }
+  },
+
+  async _plexBadgeOne(tmdbId, token) {
+    try {
+      const s = await API.get(`/movies/plex-check?tmdb_id=${tmdbId}`);
+      if (this._plexCheckToken !== token) return;   // navigated away while waiting
+      const card  = document.querySelector(`[data-tmdb-id="${tmdbId}"]`);
+      const badge = card?.querySelector('.plex-badge');
+      if (!badge) return;
+      if (s.found) {
+        const atTarget = s.resolution_rank >= 4;
+        const cls      = atTarget ? 'bg-success' : 'bg-warning text-dark';
+        const icon     = atTarget ? '🟢' : '🔵';
+        const resLabel = s.resolution ? ` · ${esc(s.resolution)}` : '';
+        badge.innerHTML = `<span class="badge ${cls}" style="font-size:.65rem">
+          ${icon} In Plex${resLabel}
+        </span>`;
+      } else {
+        badge.innerHTML = '';   // not found — clean empty
+      }
+    } catch (_) {
+      // silently clear spinner on error
+      const badge = document.querySelector(`[data-tmdb-id="${tmdbId}"] .plex-badge`);
+      if (badge) badge.innerHTML = '';
+    }
+  },
 
   _renderIptTable(d, showAll) {
     const ipt     = d.ipt;
@@ -1683,6 +1732,7 @@ const MovieDiscover = {
   _clearConfirm() {
     this._confirmed = null;
     this._showAllQualities = false;
+    this._plexCheckToken = null;
     this._renderSearch(document.getElementById('movie-tab-body'));
   },
 
