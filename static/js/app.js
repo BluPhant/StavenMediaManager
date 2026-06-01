@@ -802,7 +802,7 @@ const JobPoller = {
 // ─────────────────────────────────────────────
 const IPTSearch = {
   _lastQuery: '',
-  _lastCat: 'ipt:all',
+  _lastCat: 'ipt:tv',
   _showLowQ: false,           // toggle: include CAM/TS/Screener in movie results
   _cachedMovieResults: null,  // raw results before movie filter (for toggling)
 
@@ -811,8 +811,6 @@ const IPTSearch = {
     const sel = this._lastCat;
     const o = (v, label) => `<option value="${v}"${sel===v?' selected':''}>${label}</option>`;
     return [
-      o('ipt:all',        'All · IPT'),
-      o('ipt:movies',     'Movies · IPT'),
       o('ipt:tv',         'TV · IPT'),
       o('btn:tv',         'TV · BTN'),
       o('ipt:music',      'Music · IPT'),
@@ -820,6 +818,7 @@ const IPTSearch = {
       o('ipt:games',      'Games · IPT'),
       o('ipt:ebooks',     'Ebooks · IPT'),
       o('ipt:software',   'Software · IPT'),
+      o('ipt:all',        'All · IPT'),
     ].join('');
   },
 
@@ -1446,6 +1445,7 @@ const MovieDiscover = {
   async confirm(idx) {
     const candidate = this._searchResults[idx];
     if (!candidate) return;
+    this._showAllQualities = false;
     const panel = document.getElementById('movie-confirm-panel');
     panel.innerHTML = '<div class="text-secondary small py-3"><div class="spinner-border spinner-border-sm me-2"></div>Checking all systems…</div>';
     document.getElementById('movie-search-results').innerHTML = '';
@@ -1478,43 +1478,8 @@ const MovieDiscover = {
 
     // Build IPT results table
     let iptHtml = '';
-    if (d.ipt?.results?.length) {
-      const rows = d.ipt.results
-        .sort((a, b) => {
-          const rankA = {2160:4,1440:3,1080:2,720:1,480:0}[parseInt(a.resolution)] || 0;
-          const rankB = {2160:4,1440:3,1080:2,720:1,480:0}[parseInt(b.resolution)] || 0;
-          return rankB - rankA || b.seeders - a.seeders;
-        })
-        .slice(0, 8)
-        .map(r => {
-          const isBest = d.ipt.best?.torrent_id === r.torrent_id;
-          return `<tr class="${isBest ? 'table-info' : ''}">
-            <td><span class="badge bg-secondary">${esc(r.resolution)}</span></td>
-            <td class="small text-truncate" style="max-width:300px">${esc(r.title)}</td>
-            <td class="small text-nowrap">${_humanSize(r.size_bytes)}</td>
-            <td class="small text-success">${r.seeders}</td>
-            <td>
-              <button class="btn btn-sm btn-outline-info py-0"
-                      onclick="MovieDiscover.grab(${jsStr(r.torrent_url)},${jsStr(d.imdb_id)},${jsStr(r.title)})">
-                ${d.status === 'upgrading' ? 'Upgrade' : 'Get'}
-              </button>
-            </td>
-          </tr>`;
-        }).join('');
-      iptHtml = `
-        <div class="mt-3">
-          <div class="text-secondary small fw-semibold mb-2 text-uppercase" style="letter-spacing:.05em">
-            Available on IPT
-          </div>
-          <div class="table-responsive">
-            <table class="table table-sm table-hover mb-0">
-              <thead><tr>
-                <th>Quality</th><th>Title</th><th>Size</th><th>Seeds</th><th></th>
-              </tr></thead>
-              <tbody>${rows}</tbody>
-            </table>
-          </div>
-        </div>`;
+    if (d.ipt?.results?.length || d.ipt?.all_results?.length) {
+      iptHtml = MovieDiscover._renderIptTable(d, false);
     } else if (d.ipt?.configured) {
       iptHtml = `
         <div class="mt-3 text-secondary small">
@@ -1546,18 +1511,12 @@ const MovieDiscover = {
             </div>
           </div>
           ${upgradeAlert}
-          ${iptHtml}
+          <div id="movie-ipt-section">${iptHtml}</div>
           <div class="mt-3 d-flex gap-2">
             <button class="btn btn-sm btn-outline-secondary"
                     onclick="MovieDiscover._clearConfirm()">
               <i class="bi bi-arrow-left me-1"></i>Back to search
             </button>
-            ${!d.ipt?.results?.length && d.ipt?.configured
-              ? `<button class="btn btn-sm btn-outline-warning"
-                         onclick="MovieDiscover._queueThis()">
-                   <i class="bi bi-clock me-1"></i>Watch for it
-                 </button>`
-              : ''}
           </div>
         </div>
       </div>`;
@@ -1603,8 +1562,127 @@ const MovieDiscover = {
     }
   },
 
+  _showAllQualities: false,
+
+  _renderIptTable(d, showAll) {
+    const ipt     = d.ipt;
+    const results = showAll ? (ipt.all_results || []) : (ipt.results || []);
+    const isUpgrade = d.status === 'upgrading' || d.status === 'in_library';
+    const btnLabel  = isUpgrade ? 'Upgrade' : 'Get';
+
+    const _resBadge = res => {
+      const cls = res === '2160p' ? 'bg-warning text-dark'
+                : res === '1440p' ? 'bg-info text-dark'
+                : res === '1080p' ? 'bg-primary'
+                : res === '720p'  ? 'bg-secondary'
+                : 'bg-secondary';
+      return `<span class="badge ${cls}">${esc(res)}</span>`;
+    };
+
+    const _fitBadge = fit => {
+      const map = {
+        ideal:   ['bg-success',          'Ideal'],
+        ok:      ['bg-warning text-dark', 'OK'],
+        large:   ['bg-danger',            'Large'],
+        small:   ['bg-secondary',         'Small'],
+        unknown: ['bg-secondary',         '—'],
+      };
+      const [cls, label] = map[fit] || map.unknown;
+      return `<span class="badge ${cls}" style="font-size:.65rem">${label}</span>`;
+    };
+
+    const filterBanner = ipt.filtered_by_quality && !showAll
+      ? `<div class="alert alert-info py-2 small mb-2" style="border-color:#0dcaf0">
+           <i class="bi bi-funnel-fill me-1"></i>
+           Showing only <strong>${esc(ipt.best_resolution || 'better')}</strong> copies
+           (you have <strong>${esc(ipt.current_plex_resolution || '?')}</strong> in Plex).
+           <button class="btn btn-link btn-sm p-0 ms-2" style="font-size:.8rem"
+                   onclick="MovieDiscover._toggleAllQualities()">Show all qualities</button>
+         </div>`
+      : showAll && ipt.filtered_by_quality
+      ? `<div class="alert alert-secondary py-2 small mb-2" style="border-color:#444">
+           <i class="bi bi-eye me-1"></i>Showing all qualities.
+           <button class="btn btn-link btn-sm p-0 ms-2" style="font-size:.8rem"
+                   onclick="MovieDiscover._toggleAllQualities()">Back to upgrade view</button>
+         </div>`
+      : '';
+
+    if (!results.length) {
+      const noMsg = ipt.filtered_by_quality && !showAll
+        ? `No copies above ${esc(ipt.current_plex_resolution||'?')} found on IPT.
+           <button class="btn btn-link btn-sm p-0 ms-1" onclick="MovieDiscover._toggleAllQualities()">
+             Show all qualities
+           </button>`
+        : `Not found on IPT.
+           <button class="btn btn-sm btn-outline-secondary ms-2" onclick="MovieDiscover._queueThis()">
+             <i class="bi bi-clock me-1"></i>Watch for it
+           </button>`;
+      return `<div class="mt-3 text-secondary small">${filterBanner}${noMsg}</div>`;
+    }
+
+    const rows = results.map((r, idx) => {
+      const isBest  = idx === 0 && !showAll || r.torrent_id === ipt.best?.torrent_id;
+      const bestTag = isBest && idx === 0
+        ? `<span class="badge bg-success me-1" style="font-size:.65rem">Best Pick</span>`
+        : '';
+      const title = r.title.length > 55 ? r.title.slice(0, 55) + '…' : r.title;
+      return `
+        <tr class="${isBest && idx === 0 ? 'table-success' : ''}">
+          <td class="text-nowrap">${bestTag}${_resBadge(r.resolution)}</td>
+          <td class="small" style="max-width:260px">
+            <div class="text-truncate" title="${esc(r.title)}">${esc(title)}</div>
+            <div class="text-secondary" style="font-size:.7rem">${esc(r.ipt_category||'')}</div>
+          </td>
+          <td class="text-nowrap small">
+            ${_humanSize(r.size_bytes)}
+            <div class="mt-1">${_fitBadge(r.size_fitness)}</div>
+          </td>
+          <td class="text-nowrap small text-success">${r.seeders}</td>
+          <td>
+            <button class="btn btn-sm btn-outline-info py-0"
+                    onclick="MovieDiscover.grab(${jsStr(r.torrent_url)},${jsStr(d.imdb_id)},${jsStr(r.title)})">
+              ${btnLabel}
+            </button>
+          </td>
+        </tr>`;
+    }).join('');
+
+    const runtime = ipt.runtime_minutes
+      ? `<span class="text-secondary ms-2" style="font-size:.75rem">
+           (runtime ${ipt.runtime_minutes} min · ideal ~${Math.round(15 * ipt.runtime_minutes / 120)} GB)
+         </span>`
+      : '';
+
+    return `
+      <div class="mt-3">
+        <div class="text-secondary small fw-semibold mb-2 text-uppercase d-flex align-items-center gap-2"
+             style="letter-spacing:.05em">
+          <span>Available on IPT</span>${runtime}
+        </div>
+        ${filterBanner}
+        <div class="table-responsive">
+          <table class="table table-dark table-hover table-sm align-middle mb-0">
+            <thead class="text-secondary">
+              <tr><th>Quality</th><th>Title</th><th>Size</th><th title="Seeds">S</th><th></th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  },
+
+  _toggleAllQualities() {
+    this._showAllQualities = !this._showAllQualities;
+    if (!this._confirmed) return;
+    const iptSection = document.getElementById('movie-ipt-section');
+    if (iptSection) {
+      iptSection.innerHTML = this._renderIptTable(this._confirmed, this._showAllQualities);
+    }
+  },
+
   _clearConfirm() {
     this._confirmed = null;
+    this._showAllQualities = false;
     this._renderSearch(document.getElementById('movie-tab-body'));
   },
 

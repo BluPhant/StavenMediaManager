@@ -44,7 +44,12 @@ _RES_RANK: dict[str, int] = {
     "720p": 1,
     "480p": 0,
 }
+_RANK_RES: dict[int, str] = {4: "2160p", 3: "1440p", 2: "1080p", 1: "720p", 0: "480p"}
 _RES_RE = re.compile(r"\b(2160p|1440p|1080p|720p|480p|4[Kk]|UHD)\b", re.IGNORECASE)
+
+# Size scoring constants
+_IDEAL_GB_PER_2HR = 15.0   # target for a 2-hour 2160p movie
+_MAX_GB_PER_2HR   = 35.0   # above this = likely remux / overkill
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -101,18 +106,20 @@ def confirm_movie(req: ConfirmRequest, db: Session = Depends(get_db)):
                             detail="TMDB returned no IMDB ID for this movie.")
 
     # 2. Check all systems
-    plex_info = plex_svc.check_movie(imdb_id)
-    sbx_info  = _check_seedbox(imdb_id, db)
-    ipt_info  = _search_ipt(imdb_id)
+    plex_info    = plex_svc.check_movie(imdb_id)
+    sbx_info     = _check_seedbox(imdb_id, db)
+    plex_rank    = plex_info.get("resolution_rank", -1) if plex_info.get("found") else -1
+    runtime_min  = details.get("runtime") or 120
+    ipt_info     = _search_ipt(imdb_id,
+                               runtime_minutes=runtime_min,
+                               current_plex_rank=plex_rank)
 
     # 3. Determine status + upgrade flag
-    status           = _determine_status(plex_info, sbx_info, ipt_info)
+    status            = _determine_status(plex_info, sbx_info, ipt_info)
     upgrade_available = (
         plex_info["found"]
         and ipt_info.get("best") is not None
-        and plex_info["resolution_rank"] < _res_rank(
-            ipt_info["best"].get("resolution", "")
-        )
+        and plex_rank < _res_rank(ipt_info["best"].get("resolution", ""))
     )
 
     # 4. Upsert movie_searches record
@@ -380,32 +387,121 @@ def _check_seedbox(imdb_id: str, db: Session) -> dict:
         return {"configured": True, "found": False, "hash": None, "pct": None}
 
 
-def _search_ipt(imdb_id: str) -> dict:
+def _size_score(size_bytes: int, runtime_minutes: int = 120) -> float:
+    """
+    Score a result by size fitness for the given runtime.
+    1.0 = ideal (~15 GB for 2hr at 2160p), approaching 0 = too small or too large.
+    Scales linearly with runtime so a 3-hr epic can be 22 GB and still score well.
+    """
+    if not size_bytes:
+        return 0.5
+    size_gb   = size_bytes / (1024 ** 3)
+    scale     = max(runtime_minutes / 120.0, 0.5)
+    ideal_gb  = _IDEAL_GB_PER_2HR * scale
+    max_gb    = _MAX_GB_PER_2HR   * scale
+    if size_gb <= ideal_gb:
+        # Below ideal: light penalty for over-compression
+        return max(0.35, 0.35 + 0.65 * (size_gb / ideal_gb))
+    elif size_gb <= max_gb:
+        # Above ideal but within range: linear penalty
+        return 1.0 - 0.65 * (size_gb - ideal_gb) / (max_gb - ideal_gb)
+    else:
+        # Over max (remux / overkill): significant penalty
+        return max(0.05, 0.35 - 0.30 * min((size_gb - max_gb) / max_gb, 1.0))
+
+
+def _size_fitness_label(size_bytes: int, runtime_minutes: int = 120) -> str:
+    """Human label for size fitness: ideal | ok | large | small | unknown."""
+    if not size_bytes:
+        return "unknown"
+    size_gb  = size_bytes / (1024 ** 3)
+    scale    = max(runtime_minutes / 120.0, 0.5)
+    ideal_gb = _IDEAL_GB_PER_2HR * scale
+    max_gb   = _MAX_GB_PER_2HR   * scale
+    if size_gb > max_gb:
+        return "large"
+    elif size_gb > ideal_gb * 1.35:
+        return "ok"
+    elif size_gb >= ideal_gb * 0.35:
+        return "ideal"
+    else:
+        return "small"
+
+
+def _source_bonus(title: str) -> float:
+    """Score the source type. WEB-DL preferred; REMUX penalised for size."""
+    t = title.lower()
+    if "remux" in t:
+        return 0.4   # pristine quality but massive — penalised for size
+    if "web-dl" in t or "webdl" in t:
+        return 1.0
+    if "blu-ray" in t or "bluray" in t or "bdrip" in t or "brrip" in t:
+        return 0.9
+    if "webrip" in t:
+        return 0.8
+    return 0.6
+
+
+def _score_result(r, runtime_minutes: int) -> float:
+    """
+    Composite score used to rank IPT results.
+    Weights: resolution (dominant) → size fitness → source type → seed count.
+    """
+    res_rank   = _RES_RANK.get(_res_from_title(r.title), 0)
+    size_s     = _size_score(r.size_bytes, runtime_minutes)
+    src_s      = _source_bonus(r.title)
+    seeder_s   = min(r.seeders / 100.0, 1.0)
+    return res_rank * 100 + size_s * 30 + src_s * 10 + seeder_s * 5
+
+
+def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
+                current_plex_rank: int = -1) -> dict:
+    """
+    Search IPT by IMDB ID, score results, and return:
+    - results:      quality-filtered & scored list (above current Plex quality if upgrading)
+    - all_results:  full scored list (for "show all" toggle)
+    - best:         top-scored result from the filtered set
+    - filtered_by_quality: True when upgrade filter is active
+    """
     from ..services.iptorrents import IPTorrentsClient
     ipt = IPTorrentsClient()
+    _empty = {"configured": False, "results": [], "all_results": [], "best": None,
+              "best_resolution": None, "filtered_by_quality": False,
+              "current_plex_resolution": None, "runtime_minutes": runtime_minutes}
     if not ipt.is_configured():
-        return {"configured": False, "results": [], "best": None, "best_resolution": None}
+        return _empty
     try:
-        results = ipt.search_by_imdb_id(imdb_id, category="movies")
-        if not results:
-            return {"configured": True, "results": [], "best": None, "best_resolution": None}
+        raw = ipt.search_by_imdb_id(imdb_id, category="movies")
+        if not raw:
+            return {**_empty, "configured": True}
 
-        serialized = [_serialize_ipt(r) for r in results]
-        best = max(
-            results,
-            key=lambda r: (_RES_RANK.get(_res_from_title(r.title), 0), r.seeders),
-        )
-        best_res = _res_from_title(best.title)
+        # Sort by composite score descending
+        scored = sorted(raw, key=lambda r: _score_result(r, runtime_minutes), reverse=True)
+
+        # Quality filter: when upgrading, only show results strictly above current Plex tier
+        upgrading = current_plex_rank >= 0 and current_plex_rank < 4
+        if upgrading:
+            filtered = [r for r in scored
+                        if _RES_RANK.get(_res_from_title(r.title), 0) > current_plex_rank]
+        else:
+            filtered = scored
+
+        best_pool = filtered if filtered else scored
+        best      = best_pool[0] if best_pool else None
+
         return {
-            "configured":      True,
-            "results":         serialized,
-            "best":            _serialize_ipt(best),
-            "best_resolution": best_res,
+            "configured":              True,
+            "results":                 [_serialize_ipt(r, runtime_minutes) for r in filtered],
+            "all_results":             [_serialize_ipt(r, runtime_minutes) for r in scored],
+            "best":                    _serialize_ipt(best, runtime_minutes) if best else None,
+            "best_resolution":         _res_from_title(best.title) if best else None,
+            "filtered_by_quality":     upgrading and bool(filtered),
+            "current_plex_resolution": _RANK_RES.get(current_plex_rank) if upgrading else None,
+            "runtime_minutes":         runtime_minutes,
         }
     except Exception as exc:
         logger.warning(f"IPT search failed for {imdb_id}: {exc}")
-        return {"configured": True, "results": [], "best": None, "best_resolution": None,
-                "error": str(exc)}
+        return {**_empty, "configured": True, "error": str(exc)}
 
 
 def _determine_status(plex_info: dict, sbx_info: dict, ipt_info: dict) -> str:
@@ -517,18 +613,25 @@ def _serialize_review(r: UpgradeReview) -> dict:
     }
 
 
-def _serialize_ipt(r) -> dict:
+def _serialize_ipt(r, runtime_minutes: int = 120) -> dict:
+    size_gb      = (r.size_bytes / (1024 ** 3)) if r.size_bytes else 0.0
+    runtime_hrs  = max(runtime_minutes / 60.0, 0.5)
+    gb_per_hour  = size_gb / runtime_hrs if size_gb else 0.0
+    res          = _res_from_title(r.title)
     return {
         "torrent_id":   r.torrent_id,
         "title":        r.title,
         "size_bytes":   r.size_bytes,
+        "size_gb":      round(size_gb, 1),
+        "gb_per_hour":  round(gb_per_hour, 1),
+        "size_fitness": _size_fitness_label(r.size_bytes, runtime_minutes),
         "seeders":      r.seeders,
         "leechers":     r.leechers,
         "ipt_category": r.ipt_category,
         "torrent_url":  r.torrent_url,
         "info_url":     r.info_url,
         "pubdate":      r.pubdate,
-        "resolution":   _res_from_title(r.title),
+        "resolution":   res,
     }
 
 
