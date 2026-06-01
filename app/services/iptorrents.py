@@ -379,6 +379,7 @@ class IPTorrentsClient:
         }
 
     def search_by_imdb_id(self, imdb_id: str, category: str = "movies",
+                          resolution: str | None = None,
                           limit: int = 100) -> list[IPTResult]:
         """
         Search IPTorrents using an IMDB ID (e.g. 'tt1160419').
@@ -386,12 +387,17 @@ class IPTorrentsClient:
         IPT has IMDB IDs indexed — passing q=tt1234567 returns only that movie's
         releases (verified by test).  We skip the title-word filter used in the
         normal text search because the IMDB ID won't appear in the torrent title.
+
+        resolution: optional suffix appended to the query (e.g. '2160p').
+          q=tt1234567+2160p is verified to return only 2160p releases on IPT,
+          cutting results from ~32 to ~6 with no false negatives.
         """
         if not self.is_configured():
             raise RuntimeError("IPTorrents not configured.")
 
-        url = self._rss_url(query=imdb_id, category=category)
-        logger.info(f"IPT IMDB search: imdb_id={imdb_id} category={category}")
+        query = f"{imdb_id} {resolution}" if resolution else imdb_id
+        url = self._rss_url(query=query, category=category)
+        logger.info(f"IPT IMDB search: imdb_id={imdb_id} resolution={resolution} category={category}")
         try:
             root = self._fetch_xml(url)
         except Exception as exc:

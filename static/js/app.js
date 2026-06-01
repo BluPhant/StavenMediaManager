@@ -1569,7 +1569,10 @@ const MovieDiscover = {
     if (!this._confirmed?.imdb_id) return;
     try {
       await API.post(`/movies/queue/${enc(this._confirmed.imdb_id)}`, { min_resolution: '2160p' });
-      toast(`"${this._confirmed.title}" added to watch queue.`, 'info');
+      toast(`"${this._confirmed.title}" queued — checking IPT now…`, 'info');
+      // Open Jobs panel so user can watch the check run
+      JobsPanel.open();
+      JobsPanel.refresh();
       this._renderConfirmPanel(this._confirmed);
     } catch (e) {
       toast(`Queue failed: ${e.message}`, 'danger');

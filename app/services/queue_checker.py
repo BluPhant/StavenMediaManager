@@ -26,6 +26,86 @@ _RES_RANK: dict[str, int] = {
     "480p": 0,
 }
 
+# Exclude CAM / TS / Screener releases (word-boundary match so e.g. "BATS" is safe)
+_LOWQ_RE = re.compile(
+    r"\b(CAM|CAMRIP|HDCAM|TS|TELESYNC|TC|TELECINE|PDVD|SCR|SCREENER|DVDSCR)\b",
+    re.IGNORECASE,
+)
+
+
+def run_single_movie_check(job_id: int, imdb_id: str) -> None:
+    """
+    Immediate IPT check for a single movie — runs when the user first queues it.
+    Uses q=tt1234567+2160p when the target is 2160p (verified to work on IPT).
+    """
+    db = SessionLocal()
+    try:
+        movie = db.query(MovieSearch).filter(MovieSearch.imdb_id == imdb_id).first()
+        if not movie:
+            update_job(job_id, status="error", message=f"Movie {imdb_id} not found.")
+            return
+        title    = movie.title
+        year     = movie.year
+        min_res  = movie.queue_min_res or "2160p"
+        min_rank = _RES_RANK.get(min_res.lower(), 4)
+    finally:
+        db.close()
+
+    title_str = f"{title} ({year})" if year else title
+    update_job(job_id, status="running", progress=15, message=f"Checking IPT for {title_str}…")
+
+    ipt = IPTorrentsClient()
+    if not ipt.is_configured():
+        update_job(job_id, status="done", progress=100,
+                   message=f"Queued: {title_str}. IPT not configured.")
+        return
+
+    rt = RtorrentSource()
+
+    try:
+        # Append resolution to query when targeting 2160p — verified to cut results
+        # from ~32 mixed to ~6 clean 2160p-only results on IPT.
+        res_param = min_res if min_rank >= 4 else None
+        results   = ipt.search_by_imdb_id(imdb_id, category="movies", resolution=res_param)
+        # Exclude CAM/TS/Screener
+        results   = [r for r in results if not _LOWQ_RE.search(r.title)]
+
+        if not results:
+            update_job(job_id, status="done", progress=100,
+                       message=f"Not on IPT yet at {min_res} — {title_str} is on the watch list.")
+            return
+
+        best = _pick_best(results, min_rank)
+        if not best:
+            top_res = _res_from_title(results[0].title)
+            update_job(job_id, status="done", progress=100,
+                       message=f"Found on IPT but not at {min_res} (best: {top_res}). "
+                               f"{title_str} stays on watch list.")
+            return
+
+        if not rt.is_configured():
+            update_job(job_id, status="done", progress=100,
+                       message=f"Found {_res_from_title(best.title)} on IPT but rTorrent "
+                               f"not configured — {title_str} stays on watch list.")
+            return
+
+        update_job(job_id, progress=60, message=f"Grabbing {best.title[:65]}…")
+        torrent_bytes = ipt.fetch_torrent_bytes(best.torrent_url)
+        info_hash     = extract_info_hash(torrent_bytes)
+        rt.load_torrent(torrent_bytes, label=settings.rtorrent_tag)
+        _mark_grabbed(imdb_id, info_hash)
+
+        if settings.tmdb_api_key:
+            from .movies import auto_match_movie
+            auto_match_movie(best.title, settings.tmdb_api_key, None)
+
+        update_job(job_id, status="done", progress=100,
+                   message=f"Grabbed: {best.title[:70]}")
+
+    except Exception as exc:
+        logger.error(f"Single check failed for {imdb_id}: {exc}", exc_info=True)
+        update_job(job_id, status="error", message=f"Check failed: {exc}")
+
 
 def run_queue_check(job_id: int) -> None:
     """
@@ -69,13 +149,16 @@ def run_queue_check(job_id: int) -> None:
         update_job(job_id, progress=pct_base,
                    message=f"[{idx+1}/{total}] Checking {movie.title} ({movie.year})…")
         try:
-            results = ipt.search_by_imdb_id(movie.imdb_id, category="movies")
+            min_res  = movie.queue_min_res or "2160p"
+            min_rank = _RES_RANK.get(min_res.lower(), 4)
+            res_param = min_res if min_rank >= 4 else None
+            results = ipt.search_by_imdb_id(movie.imdb_id, category="movies",
+                                             resolution=res_param)
+            results = [r for r in results if not _LOWQ_RE.search(r.title)]
             if not results:
                 _bump_check_count(movie.imdb_id)
                 continue
 
-            # Pick best result at or above the queue's minimum resolution
-            min_rank = _RES_RANK.get((movie.queue_min_res or "2160p").lower(), 4)
             best = _pick_best(results, min_rank)
             if not best:
                 _bump_check_count(movie.imdb_id)

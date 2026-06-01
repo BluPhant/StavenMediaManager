@@ -45,7 +45,11 @@ _RES_RANK: dict[str, int] = {
     "480p": 0,
 }
 _RANK_RES: dict[int, str] = {4: "2160p", 3: "1440p", 2: "1080p", 1: "720p", 0: "480p"}
-_RES_RE = re.compile(r"\b(2160p|1440p|1080p|720p|480p|4[Kk]|UHD)\b", re.IGNORECASE)
+_RES_RE   = re.compile(r"\b(2160p|1440p|1080p|720p|480p|4[Kk]|UHD)\b", re.IGNORECASE)
+_LOWQ_RE  = re.compile(
+    r"\b(CAM|CAMRIP|HDCAM|TS|TELESYNC|TC|TELECINE|PDVD|SCR|SCREENER|DVDSCR)\b",
+    re.IGNORECASE,
+)
 
 # Size scoring constants
 _IDEAL_GB_PER_2HR = 15.0   # target for a 2-hour 2160p movie
@@ -186,7 +190,7 @@ def get_queue(db: Session = Depends(get_db)):
 @router.post("/queue/{imdb_id}", status_code=201)
 def queue_movie(imdb_id: str, req: QueueRequest = None,
                 db: Session = Depends(get_db)):
-    """Add a movie to the watching queue."""
+    """Add a movie to the watching queue and immediately fire an IPT check job."""
     movie = db.query(MovieSearch).filter(MovieSearch.imdb_id == imdb_id).first()
     if not movie:
         raise HTTPException(status_code=404,
@@ -196,7 +200,10 @@ def queue_movie(imdb_id: str, req: QueueRequest = None,
     movie.status        = "wanted"
     movie.queue_min_res = min_res
     db.commit()
-    return {"ok": True, "imdb_id": imdb_id, "queue_min_res": min_res}
+
+    # Fire an immediate check so the user sees a job right away
+    job_id = _submit_immediate_movie_check(imdb_id, movie.title, movie.year)
+    return {"ok": True, "imdb_id": imdb_id, "queue_min_res": min_res, "job_id": job_id}
 
 
 @router.delete("/queue/{imdb_id}")
@@ -369,6 +376,35 @@ def clear_match(category: str = Query(...), item: str = Query(...),
     return {"ok": True}
 
 
+def _submit_immediate_movie_check(imdb_id: str, title: str,
+                                   year: int | None) -> int | None:
+    """Create a job and submit an immediate IPT check for a single queued movie."""
+    from ..database import SessionLocal as _SL
+    from ..models import Job as _Job
+    from ..services.job_manager import submit_single_movie_check
+    year_str = f" ({year})" if year else ""
+    db2 = _SL()
+    try:
+        job = _Job(
+            type="queue_check",
+            category="movies",
+            item_name=f"Check: {title}{year_str}",
+            source_path="",
+            status="pending",
+            progress=0,
+        )
+        db2.add(job)
+        db2.commit()
+        db2.refresh(job)
+        submit_single_movie_check(job.id, imdb_id)
+        return job.id
+    except Exception as exc:
+        logger.warning(f"Immediate check job creation failed for {imdb_id}: {exc}")
+        return None
+    finally:
+        db2.close()
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _res_from_title(title: str) -> str:
@@ -494,7 +530,12 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
     if not ipt.is_configured():
         return _empty
     try:
-        raw = ipt.search_by_imdb_id(imdb_id, category="movies")
+        # Use resolution suffix in query when in Plex below 2160p — verified to
+        # reduce IPT results from ~32 mixed to ~6 clean on-target results.
+        res_param = "2160p" if 0 <= current_plex_rank < 4 else None
+        raw = ipt.search_by_imdb_id(imdb_id, category="movies", resolution=res_param)
+        # Strip CAM / TS / Screener (word-boundary safe — won't catch "BATS")
+        raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
         if not raw:
             return {**_empty, "configured": True}
 

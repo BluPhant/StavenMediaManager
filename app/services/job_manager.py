@@ -88,6 +88,13 @@ def submit_queue_check(job_id: int) -> None:
     _executor.submit(_guarded, job_id, run_queue_check)
 
 
+def submit_single_movie_check(job_id: int, imdb_id: str) -> None:
+    from ..services.queue_checker import run_single_movie_check
+
+    update_job(job_id, status="running", progress=0)
+    _executor.submit(_guarded, job_id, run_single_movie_check, imdb_id)
+
+
 def start_queue_scheduler() -> None:
     """
     Start a daemon thread that fires a queue_check job every 4 hours.
