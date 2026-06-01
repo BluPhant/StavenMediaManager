@@ -1547,20 +1547,18 @@ const MovieDiscover = {
         title:          title,
         imdb_id:        imdbId,
       });
-      toast('Added to seedbox!', 'success');
-      // Re-confirm to refresh status
-      if (this._confirmed) {
-        const data = await API.post('/movies/confirm', { tmdb_id: this._confirmed.tmdb_id });
-        this._confirmed = data;
-        this._renderConfirmPanel(data);
-      }
+      // Navigate home and show Jobs so user can watch download progress
+      this._grabbing = false;
+      Router.go('/');
+      await Router.route();
+      JobsPanel.open();
+      JobsPanel.refresh();
     } catch (e) {
       if (e.status === 409 && e.detail?.conflict) {
         toast(`Already on seedbox: ${e.detail.name} (${e.detail.pct}%)`, 'warning');
       } else {
         toast(`Grab failed: ${e.message}`, 'danger');
       }
-    } finally {
       this._grabbing = false;
     }
   },
@@ -1569,11 +1567,11 @@ const MovieDiscover = {
     if (!this._confirmed?.imdb_id) return;
     try {
       await API.post(`/movies/queue/${enc(this._confirmed.imdb_id)}`, { min_resolution: '2160p' });
-      toast(`"${this._confirmed.title}" queued — checking IPT now…`, 'info');
-      // Open Jobs panel so user can watch the check run
+      // Navigate home and show Jobs so user can watch the immediate check run
+      Router.go('/');
+      await Router.route();
       JobsPanel.open();
       JobsPanel.refresh();
-      this._renderConfirmPanel(this._confirmed);
     } catch (e) {
       toast(`Queue failed: ${e.message}`, 'danger');
     }
