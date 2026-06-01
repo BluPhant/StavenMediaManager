@@ -1,8 +1,11 @@
 import json
+import logging
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
+
+logger = logging.getLogger(__name__)
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 TMDB_IMG = "https://image.tmdb.org/t/p/w200"
@@ -186,6 +189,34 @@ def auto_match_movie(item_name: str, api_key: str, db) -> "MovieMatch | None":
     finally:
         if db is None:
             _db.close()
+
+
+def get_tmdb_details(tmdb_id: int, api_key: str) -> dict | None:
+    """
+    Fetch full movie details from TMDB for a known tmdb_id.
+    Returns a dict that includes imdb_id (the tt-ID), or None on failure.
+    """
+    try:
+        data = _get(f"/movie/{tmdb_id}", {"api_key": api_key, "language": "en-US"})
+        yr_str = (data.get("release_date") or "")[:4]
+        yr = int(yr_str) if yr_str.isdigit() else None
+        poster = data.get("poster_path")
+        return {
+            "tmdb_id":        data["id"],
+            "imdb_id":        data.get("imdb_id") or "",   # e.g. "tt1234567"
+            "title":          data["title"],
+            "year":           yr,
+            "overview":       (data.get("overview") or "")[:500],
+            "poster_url":     f"{TMDB_IMG}{poster}" if poster else None,
+            "formatted_name": f"{data['title']} ({yr_str})" if yr_str else data["title"],
+            "tagline":        data.get("tagline") or "",
+            "vote_average":   data.get("vote_average"),
+            "runtime":        data.get("runtime"),
+            "genres":         [g["name"] for g in data.get("genres", [])],
+        }
+    except Exception as exc:
+        logger.warning(f"TMDB details fetch failed for tmdb_id={tmdb_id}: {exc}")
+        return None
 
 
 def _get(path: str, params: dict) -> dict:

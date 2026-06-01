@@ -1,9 +1,10 @@
-import json
 import logging
 import os
+import re
 import shutil
 import threading
 import urllib.request
+from datetime import datetime
 
 from ..config import settings
 from .job_manager import update_job
@@ -42,13 +43,29 @@ def dest_subdir(category: str) -> str:
     return DEST_MAP.get(category.lower(), category.lower())
 
 
-def run_move(job_id: int, source_path: str, formatted_name: str, category: str) -> None:
+def run_move(job_id: int, source_path: str, formatted_name: str,
+             category: str, imdb_id: str = "") -> None:
     update_job(job_id, status="running", progress=5, message="Preparing destination...")
 
     subdir   = dest_subdir(category)
     dest_dir = os.path.join(settings.media_dir, subdir, formatted_name)
 
     try:
+        # ── Upgrade detection ─────────────────────────────────────────────────
+        # If dest already has video files and this is a movie, trash the old copy
+        # and create an UpgradeReview so the user can confirm or revert.
+        is_movie = category.lower() in ("movies", "movie")
+        upgrade_review_id = None
+        if is_movie and os.path.isdir(dest_dir):
+            existing = os.listdir(dest_dir)
+            video_files = [f for f in existing if _is_video(f)]
+            if video_files:
+                update_job(job_id, progress=6,
+                           message=f"Existing copy found — moving to trash…")
+                upgrade_review_id = _trash_old_copy(
+                    dest_dir, formatted_name, imdb_id, video_files
+                )
+
         os.makedirs(dest_dir, exist_ok=True)
 
         entries = os.listdir(source_path)
@@ -70,15 +87,22 @@ def run_move(job_id: int, source_path: str, formatted_name: str, category: str) 
         except OSError:
             pass
 
-        # Plex refresh runs async — never delays job completion
-        threading.Thread(target=_try_plex_refresh, args=(category,), daemon=True).start()
+        # Update UpgradeReview with new file info (now files are in dest_dir)
+        if upgrade_review_id:
+            _update_review_new_file(upgrade_review_id, dest_dir)
 
+        # Plex targeted refresh runs async — never delays job completion
+        threading.Thread(
+            target=_try_plex_refresh, args=(category, dest_dir), daemon=True
+        ).start()
+
+        suffix = " Upgrade review pending." if upgrade_review_id else ""
         update_job(
             job_id,
             status="done",
             progress=100,
             dest_path=dest_dir,
-            message=f"Moved to {dest_dir}. Plex refresh queued.",
+            message=f"Moved to {dest_dir}. Plex refresh queued.{suffix}",
         )
 
     except Exception as exc:
@@ -88,44 +112,134 @@ def run_move(job_id: int, source_path: str, formatted_name: str, category: str) 
 
 # ── Plex refresh (best-effort, fire-and-forget from caller) ──────────────────
 
-_plex_section_cache: dict[str, str | None] = {}   # plex_type → section_id
-
-
-def _try_plex_refresh(category: str) -> None:
+def _try_plex_refresh(category: str, dest_path: str | None = None) -> None:
     """Run in a background thread — never blocks the move job."""
-    if not (settings.plex_url and settings.plex_token):
-        return
-    try:
-        section_id = _plex_section_id(category)
-        base  = settings.plex_url.rstrip("/")
-        token = settings.plex_token
-        path  = f"/library/sections/{section_id}/refresh" if section_id else "/library/sections/all/refresh"
-        url   = f"{base}{path}?X-Plex-Token={token}"
-        with urllib.request.urlopen(urllib.request.Request(url), timeout=10):  # noqa: S310
-            pass
-        logger.info(f"Plex refresh triggered for section {section_id}")
-    except Exception as exc:
-        logger.warning(f"Plex refresh failed (non-fatal): {exc}")
+    if category.lower() in ("movies", "movie"):
+        from . import plex as plex_svc
+        plex_svc.refresh_library_path(dest_path)
+    elif settings.plex_url and settings.plex_token:
+        # Non-movie categories: trigger a full section refresh (existing behaviour)
+        try:
+            plex_type  = PLEX_TYPE_MAP.get(category.lower())
+            base  = settings.plex_url.rstrip("/")
+            token = settings.plex_token
+            if plex_type:
+                from . import plex as plex_svc
+                sid = plex_svc.get_section_id_for_movies() if plex_type == "movie" else None
+                # For non-movie types fall back to sections/all
+                url = (
+                    f"{base}/library/sections/{sid}/refresh?X-Plex-Token={token}"
+                    if sid else
+                    f"{base}/library/sections/all/refresh?X-Plex-Token={token}"
+                )
+            else:
+                url = f"{base}/library/sections/all/refresh?X-Plex-Token={token}"
+            with urllib.request.urlopen(urllib.request.Request(url), timeout=10):  # noqa: S310
+                pass
+            logger.info(f"Plex refresh triggered for category '{category}'")
+        except Exception as exc:
+            logger.warning(f"Plex refresh failed (non-fatal): {exc}")
 
 
-def _plex_section_id(category: str) -> str | None:
-    plex_type = PLEX_TYPE_MAP.get(category.lower())
-    if not plex_type:
+# ── Upgrade helpers ───────────────────────────────────────────────────────────
+
+_VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".mov", ".m4v", ".ts", ".iso"}
+_RES_RE     = re.compile(r"\b(2160p|1440p|1080p|720p|480p|4[Kk]|UHD)\b", re.IGNORECASE)
+
+
+def _is_video(name: str) -> bool:
+    return os.path.splitext(name)[1].lower() in _VIDEO_EXTS
+
+
+def _extract_res(name: str) -> str | None:
+    m = _RES_RE.search(name)
+    if not m:
         return None
-    # Return cached value if we've looked this up before
-    if plex_type in _plex_section_cache:
-        return _plex_section_cache[plex_type]
-    base  = settings.plex_url.rstrip("/")
-    token = settings.plex_token
-    url   = f"{base}/library/sections?X-Plex-Token={token}"
-    req   = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
-        data = json.loads(resp.read().decode())
-    section_id = None
-    for section in data.get("MediaContainer", {}).get("Directory", []):
-        if section.get("type") == plex_type:
-            section_id = str(section["key"])
-            break
-    _plex_section_cache[plex_type] = section_id
-    logger.info(f"Plex section ID for '{plex_type}' cached as {section_id}")
-    return section_id
+    val = m.group(1).lower()
+    return "2160p" if val in ("4k", "uhd") else val
+
+
+def _main_video_file(folder: str) -> tuple[str | None, int]:
+    """Return (filename, size_bytes) of the largest video file in folder."""
+    best_name, best_size = None, 0
+    try:
+        for f in os.listdir(folder):
+            if _is_video(f):
+                try:
+                    sz = os.path.getsize(os.path.join(folder, f))
+                    if sz > best_size:
+                        best_name, best_size = f, sz
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return best_name, best_size
+
+
+def _trash_old_copy(dest_dir: str, formatted_name: str,
+                    imdb_id: str, video_files: list[str]) -> int | None:
+    """
+    Move existing files from dest_dir to the .trash subfolder.
+    Creates an UpgradeReview DB record.  Returns review ID or None on error.
+    """
+    subdir    = "movies"   # only called for movie category
+    trash_dir = os.path.join(settings.media_dir, subdir, ".trash", formatted_name)
+    try:
+        os.makedirs(trash_dir, exist_ok=True)
+        for name in os.listdir(dest_dir):
+            shutil.move(os.path.join(dest_dir, name), os.path.join(trash_dir, name))
+
+        old_fname, old_size = _main_video_file(trash_dir)
+        old_res = _extract_res(old_fname or "")
+
+        from ..database import SessionLocal
+        from ..models import UpgradeReview
+        db = SessionLocal()
+        try:
+            review = UpgradeReview(
+                imdb_id      = imdb_id or None,
+                title        = formatted_name,
+                old_path     = trash_dir,
+                new_path     = dest_dir,
+                old_filename = old_fname,
+                new_filename = None,    # filled in after new files land
+                old_size_bytes = old_size or None,
+                new_size_bytes = None,
+                old_resolution = old_res,
+                new_resolution = None,
+            )
+            db.add(review)
+            db.commit()
+            db.refresh(review)
+            logger.info(
+                f"Upgrade review created: id={review.id} "
+                f"'{formatted_name}' old={old_res}"
+            )
+            return review.id
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning(f"Failed to trash old copy for '{formatted_name}': {exc}")
+        return None
+
+
+def _update_review_new_file(review_id: int, dest_dir: str) -> None:
+    """After new files land in dest_dir, fill in new_filename/size/resolution."""
+    from ..database import SessionLocal
+    from ..models import UpgradeReview
+    db = SessionLocal()
+    try:
+        review = db.query(UpgradeReview).filter(UpgradeReview.id == review_id).first()
+        if not review:
+            return
+        new_fname, new_size = _main_video_file(dest_dir)
+        review.new_filename   = new_fname
+        review.new_size_bytes = new_size or None
+        review.new_resolution = _extract_res(new_fname or "")
+        db.commit()
+        logger.info(
+            f"Upgrade review {review_id} updated: "
+            f"new={review.new_resolution} ({new_fname})"
+        )
+    finally:
+        db.close()

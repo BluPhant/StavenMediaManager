@@ -135,6 +135,7 @@ class GrabRequest(BaseModel):
     force: bool = False       # skip duplicate check
     title: str = ""           # search result title — used for auto TMDB match
     suggested_type: str = ""  # "movies" triggers auto-match
+    imdb_id: str = ""         # if set, links the grab to a movie_searches record
 
 
 @router.post("/grab", status_code=201)
@@ -198,6 +199,37 @@ def iptorrents_grab(req: GrabRequest, db: Session = Depends(get_db)):
         logger.error(f"IPT grab rTorrent error: {exc}")
         raise HTTPException(status_code=502, detail=f"Failed to load into rTorrent: {exc}")
 
+    # Resolve the info hash for linking to movie_searches
+    info_hash = ""
+    try:
+        info_hash = extract_info_hash(torrent_bytes)
+    except Exception:
+        pass
+
+    # If this grab is linked to a movie_searches record, store the hash
+    if req.imdb_id and info_hash:
+        def _link_movie():
+            from ..database import SessionLocal
+            from ..models import MovieSearch
+            from datetime import datetime
+            db = SessionLocal()
+            try:
+                movie = db.query(MovieSearch).filter(
+                    MovieSearch.imdb_id == req.imdb_id
+                ).first()
+                if movie:
+                    movie.sbx_hash       = info_hash
+                    movie.sbx_pct        = 0
+                    movie.sbx_checked_at = datetime.utcnow()
+                    movie.status         = "grabbed"
+                    db.commit()
+                    logger.info(
+                        f"Linked grab {info_hash} → movie_searches({req.imdb_id})"
+                    )
+            finally:
+                db.close()
+        threading.Thread(target=_link_movie, daemon=True).start()
+
     # Auto-match movies to TMDB in the background so the match is ready by the
     # time the sync job downloads the file (enabling auto-move on sync).
     if req.suggested_type == "movies" and req.title and settings.tmdb_api_key:
@@ -211,4 +243,4 @@ def iptorrents_grab(req: GrabRequest, db: Session = Depends(get_db)):
                 logger.info(f"Auto-match: no confident result for '{torrent_title}'")
         threading.Thread(target=_do_match, daemon=True).start()
 
-    return {"status": "ok", "label": label, "size": len(torrent_bytes)}
+    return {"status": "ok", "label": label, "size": len(torrent_bytes), "hash": info_hash}

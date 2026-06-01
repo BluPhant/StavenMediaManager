@@ -378,6 +378,42 @@ class IPTorrentsClient:
             "attempts":   attempts,
         }
 
+    def search_by_imdb_id(self, imdb_id: str, category: str = "movies",
+                          limit: int = 100) -> list[IPTResult]:
+        """
+        Search IPTorrents using an IMDB ID (e.g. 'tt1160419').
+
+        IPT has IMDB IDs indexed — passing q=tt1234567 returns only that movie's
+        releases (verified by test).  We skip the title-word filter used in the
+        normal text search because the IMDB ID won't appear in the torrent title.
+        """
+        if not self.is_configured():
+            raise RuntimeError("IPTorrents not configured.")
+
+        url = self._rss_url(query=imdb_id, category=category)
+        logger.info(f"IPT IMDB search: imdb_id={imdb_id} category={category}")
+        try:
+            root = self._fetch_xml(url)
+        except Exception as exc:
+            raise RuntimeError(f"IPTorrents RSS fetch failed: {exc}") from exc
+
+        channel = root.find("channel")
+        if channel is None:
+            return []
+
+        results: list[IPTResult] = []
+        for item in channel.findall("item"):
+            try:
+                r = self._parse_item(item)
+                if r:
+                    results.append(r)
+            except Exception as exc:
+                logger.debug(f"IPT RSS item parse error: {exc}")
+
+        # No title filter — IMDB ID search already returns exact matches
+        logger.info(f"IPT IMDB search returned {len(results)} results")
+        return results[:limit]
+
     def fetch_torrent_bytes(self, torrent_url: str) -> bytes:
         """Download the .torrent file from IPTorrents and return raw bytes."""
         req = urllib.request.Request(

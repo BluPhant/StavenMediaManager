@@ -33,6 +33,9 @@ async def lifespan(app: FastAPI):
             db.commit()
     finally:
         db.close()
+    # Start the queue checker scheduler (fires every 4h if movies are queued)
+    from .services.job_manager import start_queue_scheduler
+    start_queue_scheduler()
     logger.info("Startup complete.")
     yield
 

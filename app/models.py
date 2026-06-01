@@ -42,6 +42,74 @@ class MovieMatch(Base):
     )
 
 
+class MovieSearch(Base):
+    """
+    Tracks every confirmed movie search, keyed by IMDB ID.
+    Plex is the system of record; this table is for workflow tracking only.
+    """
+    __tablename__ = "movie_searches"
+
+    imdb_id           = Column(String(20), primary_key=True)
+    tmdb_id           = Column(Integer, nullable=True)
+    title             = Column(String(500), nullable=False)
+    year              = Column(Integer, nullable=True)
+    poster_url        = Column(String(500), nullable=True)
+    overview          = Column(Text, nullable=True)
+
+    # Search tracking
+    first_searched    = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_searched     = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Plex status cache (refreshed on each confirm/refresh)
+    plex_found        = Column(Integer, default=0, nullable=False)   # bool
+    plex_resolution   = Column(String(20), nullable=True)            # '4k','1080','720'
+    plex_path         = Column(String(1000), nullable=True)
+    plex_checked_at   = Column(DateTime, nullable=True)
+
+    # Seedbox status cache
+    sbx_hash          = Column(String(100), nullable=True)           # torrent info hash
+    sbx_pct           = Column(Integer, nullable=True)
+    sbx_checked_at    = Column(DateTime, nullable=True)
+
+    # IPT last search cache
+    ipt_best_res      = Column(String(20), nullable=True)            # '2160p','1080p'
+    ipt_checked_at    = Column(DateTime, nullable=True)
+
+    # Lifecycle status
+    status            = Column(String(50), default="searched", nullable=False)
+    # searched | wanted | grabbed | upgrading | in_library
+
+    # Future queue (watch for availability)
+    queued            = Column(Integer, default=0, nullable=False)   # bool
+    queue_min_res     = Column(String(20), nullable=True)            # '2160p','1080p'
+    queue_checked_at  = Column(DateTime, nullable=True)
+    queue_check_count = Column(Integer, default=0, nullable=False)
+
+
+class UpgradeReview(Base):
+    """
+    Pending review when a better copy of a movie replaces an existing one.
+    Old file is in .trash; new file is in the library. User must confirm or revert.
+    """
+    __tablename__ = "upgrade_reviews"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    imdb_id        = Column(String(20), nullable=True)
+    title          = Column(String(500), nullable=False)
+    old_path       = Column(String(1000), nullable=False)   # folder in .trash
+    new_path       = Column(String(1000), nullable=False)   # folder in movies
+    old_filename   = Column(String(500), nullable=True)
+    new_filename   = Column(String(500), nullable=True)
+    old_size_bytes = Column(Integer, nullable=True)
+    new_size_bytes = Column(Integer, nullable=True)
+    old_resolution = Column(String(20), nullable=True)
+    new_resolution = Column(String(20), nullable=True)
+    status         = Column(String(20), default="pending", nullable=False)
+    # pending | confirmed | reverted
+    created_at     = Column(DateTime, default=datetime.utcnow, nullable=False)
+    resolved_at    = Column(DateTime, nullable=True)
+
+
 class SyncedItem(Base):
     """Tracks torrent hashes that have already been imported, preventing re-download."""
     __tablename__ = "synced_items"

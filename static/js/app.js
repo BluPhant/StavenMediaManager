@@ -1345,17 +1345,504 @@ function _shortDate(dateStr) {
 // ─────────────────────────────────────────────
 // Hash router
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// Movie Discovery (IMDB-keyed movie search)
+// ─────────────────────────────────────────────
+const MovieDiscover = {
+  _tab: 'search',          // 'search' | 'history' | 'queue' | 'reviews'
+  _searchResults: [],      // TMDB candidates from /movies/search
+  _confirmed: null,        // full confirm response (plex/sbx/ipt/status)
+  _grabbing: false,
+
+  async render(tab) {
+    this._tab = tab || this._tab || 'search';
+    const app = document.getElementById('app');
+    app.innerHTML = `
+      <div class="d-flex align-items-center gap-3 mb-3">
+        <h5 class="mb-0"><i class="bi bi-film text-info me-2"></i>Movies</h5>
+      </div>
+      <ul class="nav nav-tabs mb-3" id="movie-tabs">
+        ${['search','history','queue','reviews'].map(t => `
+          <li class="nav-item">
+            <a class="nav-link ${this._tab===t?'active':''}" href="#/movies/${t}"
+               id="movie-tab-${t}">${_movieTabLabel(t)}</a>
+          </li>`).join('')}
+      </ul>
+      <div id="movie-tab-body"></div>`;
+    await this._renderTab();
+    this._pollReviewBadge();
+  },
+
+  async _renderTab() {
+    const body = document.getElementById('movie-tab-body');
+    if (!body) return;
+    if      (this._tab === 'search')  await this._renderSearch(body);
+    else if (this._tab === 'history') await this._renderHistory(body);
+    else if (this._tab === 'queue')   await this._renderQueue(body);
+    else if (this._tab === 'reviews') await this._renderReviews(body);
+  },
+
+  // ── Search tab ──────────────────────────────────────────────────────────────
+  async _renderSearch(body) {
+    body.innerHTML = `
+      <div class="row g-3 mb-3">
+        <div class="col-md-7">
+          <div class="input-group">
+            <input id="movie-search-input" type="text" class="form-control"
+                   placeholder="Movie title…"
+                   onkeydown="if(event.key==='Enter') MovieDiscover.search()">
+            <button class="btn btn-info" onclick="MovieDiscover.search()">
+              <i class="bi bi-search me-1"></i>Search
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id="movie-search-results"></div>
+      <div id="movie-confirm-panel"></div>`;
+
+    // Re-render confirmed state if we have it
+    if (this._confirmed) {
+      this._renderConfirmPanel(this._confirmed);
+    }
+  },
+
+  async search() {
+    const q = document.getElementById('movie-search-input')?.value?.trim();
+    if (!q) return;
+    this._confirmed = null;
+    document.getElementById('movie-confirm-panel').innerHTML = '';
+    const res = document.getElementById('movie-search-results');
+    res.innerHTML = '<div class="text-secondary small py-2"><div class="spinner-border spinner-border-sm me-2"></div>Searching…</div>';
+    try {
+      this._searchResults = await API.get(`/movies/search?q=${enc(q)}`);
+    } catch (e) {
+      res.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`;
+      return;
+    }
+    if (!this._searchResults.length) {
+      res.innerHTML = '<div class="text-secondary py-2">No results found.</div>';
+      return;
+    }
+    res.innerHTML = `
+      <div class="row g-2">
+        ${this._searchResults.map((r, i) => `
+          <div class="col-6 col-md-4 col-lg-3">
+            <div class="card h-100 border-secondary movie-candidate-card"
+                 onclick="MovieDiscover.confirm(${i})" style="cursor:pointer">
+              ${r.poster_url
+                ? `<img src="${esc(r.poster_url)}" class="card-img-top"
+                        style="height:180px;object-fit:cover" alt="">`
+                : `<div class="d-flex align-items-center justify-content-center bg-secondary"
+                        style="height:180px"><i class="bi bi-film fs-1 text-muted"></i></div>`}
+              <div class="card-body p-2">
+                <div class="fw-semibold small">${esc(r.title)}</div>
+                <div class="text-secondary small">${r.year || ''}</div>
+              </div>
+            </div>
+          </div>`).join('')}
+      </div>`;
+  },
+
+  async confirm(idx) {
+    const candidate = this._searchResults[idx];
+    if (!candidate) return;
+    const panel = document.getElementById('movie-confirm-panel');
+    panel.innerHTML = '<div class="text-secondary small py-3"><div class="spinner-border spinner-border-sm me-2"></div>Checking all systems…</div>';
+    document.getElementById('movie-search-results').innerHTML = '';
+    try {
+      const data = await API.post('/movies/confirm', { tmdb_id: candidate.tmdb_id });
+      this._confirmed = data;
+      this._renderConfirmPanel(data);
+    } catch (e) {
+      panel.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`;
+    }
+  },
+
+  _renderConfirmPanel(d) {
+    const panel = document.getElementById('movie-confirm-panel');
+    if (!panel) return;
+    const statusBadge = _movieStatusBadge(d.status, d.plex?.resolution);
+    const plexHtml = d.plex?.found
+      ? `<span class="badge bg-success me-2">🟢 In Plex — ${esc(d.plex.resolution || '?')}</span>`
+      : '<span class="badge bg-secondary me-2">Not in Plex</span>';
+    const sbxHtml = d.sbx?.found
+      ? `<span class="badge bg-warning text-dark me-2">🟡 On Seedbox ${d.sbx.pct != null ? d.sbx.pct+'%' : ''}</span>`
+      : '';
+    const upgradeAlert = d.upgrade_available
+      ? `<div class="alert alert-warning py-2 mb-3">
+           <i class="bi bi-arrow-up-circle me-1"></i>
+           Better quality available — you can upgrade from ${esc(d.plex?.resolution || '?')}
+           to ${esc(d.ipt?.best_resolution || '?')}.
+         </div>`
+      : '';
+
+    // Build IPT results table
+    let iptHtml = '';
+    if (d.ipt?.results?.length) {
+      const rows = d.ipt.results
+        .sort((a, b) => {
+          const rankA = {2160:4,1440:3,1080:2,720:1,480:0}[parseInt(a.resolution)] || 0;
+          const rankB = {2160:4,1440:3,1080:2,720:1,480:0}[parseInt(b.resolution)] || 0;
+          return rankB - rankA || b.seeders - a.seeders;
+        })
+        .slice(0, 8)
+        .map(r => {
+          const isBest = d.ipt.best?.torrent_id === r.torrent_id;
+          return `<tr class="${isBest ? 'table-info' : ''}">
+            <td><span class="badge bg-secondary">${esc(r.resolution)}</span></td>
+            <td class="small text-truncate" style="max-width:300px">${esc(r.title)}</td>
+            <td class="small text-nowrap">${_humanSize(r.size_bytes)}</td>
+            <td class="small text-success">${r.seeders}</td>
+            <td>
+              <button class="btn btn-sm btn-outline-info py-0"
+                      onclick="MovieDiscover.grab(${jsStr(r.torrent_url)},${jsStr(d.imdb_id)},${jsStr(r.title)})">
+                ${d.status === 'upgrading' ? 'Upgrade' : 'Get'}
+              </button>
+            </td>
+          </tr>`;
+        }).join('');
+      iptHtml = `
+        <div class="mt-3">
+          <div class="text-secondary small fw-semibold mb-2 text-uppercase" style="letter-spacing:.05em">
+            Available on IPT
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+              <thead><tr>
+                <th>Quality</th><th>Title</th><th>Size</th><th>Seeds</th><th></th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>`;
+    } else if (d.ipt?.configured) {
+      iptHtml = `
+        <div class="mt-3 text-secondary small">
+          Not found on IPT.
+          <button class="btn btn-sm btn-outline-secondary ms-2"
+                  onclick="MovieDiscover._queueThis()">
+            <i class="bi bi-clock me-1"></i>Watch for it
+          </button>
+        </div>`;
+    }
+
+    panel.innerHTML = `
+      <div class="card border-secondary mt-3">
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-auto">
+              ${d.poster_url
+                ? `<img src="${esc(d.poster_url)}" style="width:100px;border-radius:6px" alt="">`
+                : `<div class="d-flex align-items-center justify-content-center bg-secondary rounded"
+                        style="width:100px;height:150px"><i class="bi bi-film fs-2"></i></div>`}
+            </div>
+            <div class="col">
+              <h5 class="mb-1">${esc(d.title)} <span class="text-secondary fs-6">(${d.year || '?'})</span></h5>
+              <div class="mb-2">${statusBadge}</div>
+              <div class="mb-2">${plexHtml}${sbxHtml}</div>
+              ${d.vote_average ? `<div class="text-secondary small mb-1">★ ${d.vote_average.toFixed(1)}</div>` : ''}
+              ${d.genres?.length ? `<div class="text-secondary small mb-2">${esc(d.genres.join(' · '))}</div>` : ''}
+              <p class="small text-secondary mb-0">${esc((d.overview||'').slice(0,200))}${(d.overview||'').length>200?'…':''}</p>
+            </div>
+          </div>
+          ${upgradeAlert}
+          ${iptHtml}
+          <div class="mt-3 d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary"
+                    onclick="MovieDiscover._clearConfirm()">
+              <i class="bi bi-arrow-left me-1"></i>Back to search
+            </button>
+            ${!d.ipt?.results?.length && d.ipt?.configured
+              ? `<button class="btn btn-sm btn-outline-warning"
+                         onclick="MovieDiscover._queueThis()">
+                   <i class="bi bi-clock me-1"></i>Watch for it
+                 </button>`
+              : ''}
+          </div>
+        </div>
+      </div>`;
+  },
+
+  async grab(torrentUrl, imdbId, title) {
+    if (this._grabbing) return;
+    this._grabbing = true;
+    try {
+      await API.post('/iptorrents/grab', {
+        torrent_url:    torrentUrl,
+        label:          '',
+        suggested_type: 'movies',
+        title:          title,
+        imdb_id:        imdbId,
+      });
+      toast('Added to seedbox!', 'success');
+      // Re-confirm to refresh status
+      if (this._confirmed) {
+        const data = await API.post('/movies/confirm', { tmdb_id: this._confirmed.tmdb_id });
+        this._confirmed = data;
+        this._renderConfirmPanel(data);
+      }
+    } catch (e) {
+      if (e.status === 409 && e.detail?.conflict) {
+        toast(`Already on seedbox: ${e.detail.name} (${e.detail.pct}%)`, 'warning');
+      } else {
+        toast(`Grab failed: ${e.message}`, 'danger');
+      }
+    } finally {
+      this._grabbing = false;
+    }
+  },
+
+  async _queueThis() {
+    if (!this._confirmed?.imdb_id) return;
+    try {
+      await API.post(`/movies/queue/${enc(this._confirmed.imdb_id)}`, { min_resolution: '2160p' });
+      toast(`"${this._confirmed.title}" added to watch queue.`, 'info');
+      this._renderConfirmPanel(this._confirmed);
+    } catch (e) {
+      toast(`Queue failed: ${e.message}`, 'danger');
+    }
+  },
+
+  _clearConfirm() {
+    this._confirmed = null;
+    this._renderSearch(document.getElementById('movie-tab-body'));
+  },
+
+  // ── History tab ─────────────────────────────────────────────────────────────
+  async _renderHistory(body) {
+    body.innerHTML = '<div class="text-secondary small py-2"><div class="spinner-border spinner-border-sm me-2"></div>Loading…</div>';
+    let rows;
+    try { rows = await API.get('/movies/history'); }
+    catch (e) { body.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`; return; }
+    if (!rows.length) {
+      body.innerHTML = '<div class="text-secondary py-3">No movies searched yet.</div>';
+      return;
+    }
+    body.innerHTML = `
+      <div class="table-responsive">
+        <table class="table table-sm table-hover">
+          <thead><tr><th>Movie</th><th>Status</th><th>Plex</th><th>Last searched</th><th></th></tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td>
+                  <span class="fw-semibold">${esc(r.title)}</span>
+                  <span class="text-secondary small ms-1">${r.year||''}</span>
+                </td>
+                <td>${_movieStatusBadge(r.status, r.plex_resolution)}</td>
+                <td>${r.plex_found
+                      ? `<span class="badge bg-success">${esc(r.plex_resolution||'?')}</span>`
+                      : '<span class="text-secondary small">—</span>'}</td>
+                <td class="text-secondary small">${_relTime(r.last_searched)}</td>
+                <td>
+                  <button class="btn btn-sm btn-outline-secondary py-0"
+                          onclick="MovieDiscover._reconfirm(${jsStr(r.imdb_id)},${r.tmdb_id})">
+                    <i class="bi bi-arrow-repeat"></i>
+                  </button>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  },
+
+  async _reconfirm(imdbId, tmdbId) {
+    this._tab = 'search';
+    document.querySelectorAll('.nav-link[id^="movie-tab-"]').forEach(el => {
+      el.classList.toggle('active', el.id === 'movie-tab-search');
+    });
+    const body = document.getElementById('movie-tab-body');
+    await this._renderSearch(body);
+    const panel = document.getElementById('movie-confirm-panel');
+    panel.innerHTML = '<div class="text-secondary small py-3"><div class="spinner-border spinner-border-sm me-2"></div>Refreshing…</div>';
+    try {
+      const data = await API.post('/movies/confirm', { tmdb_id: tmdbId });
+      this._confirmed = data;
+      this._renderConfirmPanel(data);
+    } catch (e) {
+      panel.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`;
+    }
+  },
+
+  // ── Queue tab ────────────────────────────────────────────────────────────────
+  async _renderQueue(body) {
+    body.innerHTML = '<div class="text-secondary small py-2"><div class="spinner-border spinner-border-sm me-2"></div>Loading…</div>';
+    let rows;
+    try { rows = await API.get('/movies/queue'); }
+    catch (e) { body.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`; return; }
+    if (!rows.length) {
+      body.innerHTML = `
+        <div class="text-center py-5 text-secondary">
+          <i class="bi bi-clock fs-1"></i>
+          <p class="mt-3">No movies in queue.<br>
+          <small>When a movie isn't found on IPT, use "Watch for it" to queue it.</small></p>
+        </div>`;
+      return;
+    }
+    body.innerHTML = `
+      <div class="text-secondary small mb-3">
+        Checked every 4 hours. Auto-grabs when found at the minimum quality.
+      </div>
+      <div class="row g-3">
+        ${rows.map(r => `
+          <div class="col-md-6 col-lg-4">
+            <div class="card border-secondary">
+              <div class="card-body d-flex gap-3 align-items-start">
+                ${r.poster_url
+                  ? `<img src="${esc(r.poster_url)}" style="width:60px;border-radius:4px" alt="">`
+                  : `<div class="bg-secondary rounded d-flex align-items-center justify-content-center"
+                          style="width:60px;height:90px"><i class="bi bi-film"></i></div>`}
+                <div class="flex-grow-1">
+                  <div class="fw-semibold">${esc(r.title)}</div>
+                  <div class="text-secondary small">${r.year||''}</div>
+                  <div class="small mt-1">Min: <span class="badge bg-secondary">${esc(r.queue_min_res||'2160p')}</span></div>
+                  <div class="text-secondary small">Checked ${r.queue_check_count||0} time(s)</div>
+                  ${r.queue_checked_at ? `<div class="text-secondary small">Last: ${_relTime(r.queue_checked_at)}</div>` : ''}
+                </div>
+                <button class="btn btn-sm btn-outline-danger py-0"
+                        onclick="MovieDiscover._dequeue(${jsStr(r.imdb_id)})">
+                  <i class="bi bi-x"></i>
+                </button>
+              </div>
+            </div>
+          </div>`).join('')}
+      </div>`;
+  },
+
+  async _dequeue(imdbId) {
+    try {
+      await API.del(`/movies/queue/${enc(imdbId)}`);
+      await this._renderQueue(document.getElementById('movie-tab-body'));
+    } catch (e) {
+      toast(`Error: ${e.message}`, 'danger');
+    }
+  },
+
+  // ── Reviews tab ──────────────────────────────────────────────────────────────
+  async _renderReviews(body) {
+    body.innerHTML = '<div class="text-secondary small py-2"><div class="spinner-border spinner-border-sm me-2"></div>Loading…</div>';
+    let rows;
+    try { rows = await API.get('/movies/reviews'); }
+    catch (e) { body.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`; return; }
+    if (!rows.length) {
+      body.innerHTML = `
+        <div class="text-center py-5 text-secondary">
+          <i class="bi bi-check-circle fs-1 text-success"></i>
+          <p class="mt-3">No pending upgrade reviews.</p>
+        </div>`;
+      return;
+    }
+    body.innerHTML = rows.map(r => `
+      <div class="card border-warning mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center py-2">
+          <span class="fw-semibold">${esc(r.title)}</span>
+          <span class="badge bg-warning text-dark">Pending Review</span>
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <div class="p-3 rounded border border-secondary">
+                <div class="text-danger small fw-semibold mb-2">
+                  <i class="bi bi-trash me-1"></i>Old Copy (in trash)
+                </div>
+                <div class="small">${esc(r.old_filename || 'Unknown')}</div>
+                <div class="text-secondary small">${_humanSize(r.old_size_bytes)} · ${esc(r.old_resolution || '?')}</div>
+                <div class="text-secondary small text-truncate" title="${esc(r.old_path)}">${esc(r.old_path)}</div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="p-3 rounded border border-success">
+                <div class="text-success small fw-semibold mb-2">
+                  <i class="bi bi-stars me-1"></i>New Copy (in library)
+                </div>
+                <div class="small">${esc(r.new_filename || 'Unknown')}</div>
+                <div class="text-secondary small">${_humanSize(r.new_size_bytes)} · ${esc(r.new_resolution || '?')}</div>
+                <div class="text-secondary small text-truncate" title="${esc(r.new_path)}">${esc(r.new_path)}</div>
+              </div>
+            </div>
+          </div>
+          <div class="d-flex gap-2 mt-3">
+            <button class="btn btn-success" onclick="MovieDiscover._confirmReview(${r.id})">
+              <i class="bi bi-check-lg me-1"></i>Confirm — Delete Old Copy
+            </button>
+            <button class="btn btn-outline-danger" onclick="MovieDiscover._revertReview(${r.id})">
+              <i class="bi bi-arrow-counterclockwise me-1"></i>Revert — Restore Old
+            </button>
+          </div>
+        </div>
+      </div>`).join('');
+  },
+
+  async _confirmReview(id) {
+    try {
+      await API.post(`/movies/reviews/${id}/confirm`, {});
+      toast('Old copy deleted. Upgrade confirmed!', 'success');
+      await this._renderReviews(document.getElementById('movie-tab-body'));
+      this._pollReviewBadge();
+    } catch (e) { toast(e.message, 'danger'); }
+  },
+
+  async _revertReview(id) {
+    try {
+      await API.post(`/movies/reviews/${id}/revert`, {});
+      toast('Reverted. Old copy restored.', 'info');
+      await this._renderReviews(document.getElementById('movie-tab-body'));
+      this._pollReviewBadge();
+    } catch (e) { toast(e.message, 'danger'); }
+  },
+
+  // ── Badge polling ─────────────────────────────────────────────────────────────
+  async _pollReviewBadge() {
+    try {
+      const { count } = await API.get('/movies/reviews/count');
+      const badge = document.getElementById('nav-reviews-badge');
+      if (badge) {
+        badge.textContent = count;
+        badge.classList.toggle('d-none', count === 0);
+      }
+    } catch (_) {}
+  },
+};
+
+function _movieTabLabel(t) {
+  return { search: 'Search', history: 'History', queue: 'Watching', reviews: 'Pending Review' }[t] || t;
+}
+
+function _movieStatusBadge(status, resolution) {
+  const map = {
+    in_library: '<span class="badge bg-success">🟢 In Library</span>',
+    upgrading:  `<span class="badge bg-info text-dark">🔵 In Library (${esc(resolution||'?')}) — Upgrade available</span>`,
+    grabbed:    '<span class="badge bg-warning text-dark">🟡 On Seedbox</span>',
+    available:  '<span class="badge bg-primary">🔵 Available</span>',
+    wanted:     '<span class="badge bg-secondary">⏳ Watching</span>',
+    not_found:  '<span class="badge bg-secondary">⚪ Not Found</span>',
+  };
+  return map[status] || `<span class="badge bg-secondary">${esc(status)}</span>`;
+}
+
+function _relTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const diff = (Date.now() - d) / 1000;
+  if (diff < 60)  return 'just now';
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
 const Router = {
   async route() {
     const hash = (location.hash || '#/').slice(1);
     const parts = hash.split('/').filter(Boolean);
 
-    // highlight active nav link
-    document.getElementById('nav-search-link')?.classList.toggle(
-      'text-info', parts[0] === 'search');
+    // highlight active nav links
+    document.getElementById('nav-search-link')?.classList.toggle('text-info', parts[0] === 'search');
+    document.getElementById('nav-movies-link')?.classList.toggle('text-info', parts[0] === 'movies');
 
-    if (!parts.length || (parts[0] !== 'category' && parts[0] !== 'search')) {
+    if (!parts.length || (parts[0] !== 'category' && parts[0] !== 'search' && parts[0] !== 'movies')) {
       await Views.home();
+    } else if (parts[0] === 'movies') {
+      await MovieDiscover.render(parts[1] || 'search');
     } else if (parts[0] === 'search') {
       await IPTSearch.render();
     } else if (parts.length === 2) {
@@ -1426,10 +1913,12 @@ window.addEventListener('load', async () => {
   Router.route();
   JobsPanel.refresh();
   JobPoller.init();
+  // Poll upgrade review badge every 60s
+  MovieDiscover._pollReviewBadge();
+  setInterval(() => MovieDiscover._pollReviewBadge(), 60_000);
   // Pre-fetch IPT status so grab() knows the configured sync tag
   try {
     const st = await API.get('/iptorrents/status');
     window._iptTag = (st.rtorrent?.configured) ? '' : '';
-    // tag is baked into rtorrent config; leave blank to use server default
   } catch (_) {}
 });
