@@ -53,39 +53,59 @@ def _record_synced(source: str, item_id: str, name: str) -> None:
 
 def _auto_move_if_matched(item_name: str, category: str, source_path: str) -> bool:
     """
-    If a MovieMatch already exists for this item, create and submit a move job.
-    Returns True if a move job was submitted, False otherwise.
+    Auto-process a freshly downloaded item when no user interaction is required:
+      - movies — if a MovieMatch (TMDB IMDB lookup) already exists, submit a move job
+      - music  — always submit a music_import job (FLAC→MP3 V0, tag/rename/organize,
+                 relocate to /media/music/<Letter>/<Artist>/<Artist - Album (Year)>)
+    Returns True if a job was submitted, False otherwise.
     Called from the sync worker after a successful download.
     """
-    if category != "movies":
-        return False
     db = SessionLocal()
     try:
-        match = (
-            db.query(MovieMatch)
-            .filter(MovieMatch.category == category, MovieMatch.item_name == item_name)
-            .first()
-        )
-        if not match:
-            return False
-        job = Job(
-            type="move",
-            category=category,
-            item_name=item_name,
-            source_path=source_path,
-            status="pending",
-            progress=0,
-        )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-        job_manager.submit_move(job.id, source_path, match.formatted_name, category)
-        logger.info(
-            f"Auto-move queued: '{item_name}' → '{match.formatted_name}' (job {job.id})"
-        )
-        return True
+        if category == "movies":
+            match = (
+                db.query(MovieMatch)
+                .filter(MovieMatch.category == category, MovieMatch.item_name == item_name)
+                .first()
+            )
+            if not match:
+                return False
+            job = Job(
+                type="move",
+                category=category,
+                item_name=item_name,
+                source_path=source_path,
+                status="pending",
+                progress=0,
+            )
+            db.add(job)
+            db.commit()
+            db.refresh(job)
+            job_manager.submit_move(job.id, source_path, match.formatted_name, category)
+            logger.info(
+                f"Auto-move queued: '{item_name}' → '{match.formatted_name}' (job {job.id})"
+            )
+            return True
+
+        if category == "music":
+            job = Job(
+                type="music_import",
+                category=category,
+                item_name=item_name,
+                source_path=source_path,
+                status="pending",
+                progress=0,
+            )
+            db.add(job)
+            db.commit()
+            db.refresh(job)
+            job_manager.submit_music_import(job.id, source_path)
+            logger.info(f"Auto music-import queued: '{item_name}' (job {job.id})")
+            return True
+
+        return False
     except Exception as exc:
-        logger.warning(f"Auto-move setup failed for '{item_name}': {exc}")
+        logger.warning(f"Auto-process setup failed for '{item_name}': {exc}")
         return False
     finally:
         db.close()
@@ -128,7 +148,7 @@ def run_import_by_hash(job_id: int, hash_: str) -> None:
         _record_synced(source_name, item.id, item.name)
         logger.info(f"Imported by hash: {item.name} → {dest_dir}")
         moved = _auto_move_if_matched(item.name, item.suggested_type, dest_dir)
-        msg = f"Imported: {item.name}" + (" — move to library queued." if moved else "")
+        msg = f"Imported: {item.name}" + (" — processing queued." if moved else "")
         update_job(job_id, status="done", progress=100, message=msg)
     except Exception as exc:
         logger.error(f"Import by hash failed for {hash_}: {exc}", exc_info=True)

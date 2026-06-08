@@ -22,8 +22,10 @@ LABEL org.opencontainers.image.revision="${IMAGE_REVISION}"
 LABEL org.opencontainers.image.licenses="${IMAGE_LICENSES}"
 
 # ── System deps ───────────────────────────────────────────────────────────────
+# ffmpeg provides both `ffmpeg` (FLAC→MP3 conversion) and `ffprobe` (tag/stream
+# inspection), used by app/services/music.py for the music import pipeline.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends p7zip-full openssh-client curl && \
+    apt-get install -y --no-install-recommends p7zip-full openssh-client curl ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Python deps ───────────────────────────────────────────────────────────────

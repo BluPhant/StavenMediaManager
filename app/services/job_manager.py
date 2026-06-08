@@ -65,6 +65,14 @@ def submit_move(job_id: int, source_path: str, formatted_name: str,
     _executor.submit(_guarded, job_id, run_move, source_path, formatted_name, category, imdb_id)
 
 
+def submit_music_import(job_id: int, source_path: str) -> None:
+    from ..services.music import run_music_import
+
+    _register(job_id)
+    update_job(job_id, status="running", progress=0)
+    _executor.submit(_guarded, job_id, run_music_import, source_path)
+
+
 def submit_sync(job_id: int) -> None:
     from ..services.syncer import run_sync
 

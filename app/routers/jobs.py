@@ -22,6 +22,11 @@ class MoveRequest(BaseModel):
     item_name: str
 
 
+class MusicImportRequest(BaseModel):
+    category: str
+    item_name: str
+
+
 @router.get("")
 def list_jobs(
     db: Session = Depends(get_db),
@@ -122,6 +127,44 @@ def create_move_job(req: MoveRequest, db: Session = Depends(get_db)):
     db.refresh(job)
 
     job_manager.submit_move(job.id, item_path, match.formatted_name, req.category)
+    return job
+
+
+@router.post("/music-import", status_code=201)
+def create_music_import_job(req: MusicImportRequest, db: Session = Depends(get_db)):
+    """
+    Convert a folder of FLACs (or already-converted MP3s) to tagged MP3 V0,
+    rename tracks/folder, and relocate into /media/music/<Letter>/<Artist>/...
+    See app/services/music.py for the full five-pass pipeline.
+    """
+    item_path = os.path.join(settings.incoming_dir, req.category, req.item_name)
+    if not os.path.isdir(item_path):
+        raise HTTPException(status_code=404, detail="Item directory not found")
+
+    existing = (
+        db.query(Job)
+        .filter(Job.source_path == item_path, Job.status.in_(["pending", "running"]))
+        .first()
+    )
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A job is already active for this item (id={existing.id})",
+        )
+
+    job = Job(
+        type="music_import",
+        category=req.category,
+        item_name=req.item_name,
+        source_path=item_path,
+        status="pending",
+        progress=0,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    job_manager.submit_music_import(job.id, item_path)
     return job
 
 

@@ -301,6 +301,7 @@ const Views = {
   async item(category, itemName) {
     this._loading();
     const isMovies = /movie/i.test(category);
+    const isMusic = /music/i.test(category);
     let detail, matchData;
     try {
       const fetches = [API.get(`/categories/${enc(category)}/items/${enc(itemName)}`)];
@@ -332,6 +333,14 @@ const Views = {
                 ${!hasMatch ? 'disabled title="Save an IMDB match first"' : ''}
                 onclick="Actions.move(${jsStr(category)}, ${jsStr(itemName)})">
           <i class="bi bi-box-arrow-right me-1"></i>Move to Library
+        </button>`);
+    }
+    if (isMusic) {
+      actionBtns.push(`
+        <button class="btn btn-success btn-sm" id="btn-music-import"
+                title="Convert FLAC → MP3 V0, tag, embed cover art, and file into the library"
+                onclick="Actions.musicImport(${jsStr(category)}, ${jsStr(itemName)})">
+          <i class="bi bi-music-note-beamed me-1"></i>Convert &amp; Import
         </button>`);
     }
     const actionsHtml = actionBtns.length ? `
@@ -563,6 +572,17 @@ const Actions = {
     }
   },
 
+  async musicImport(category, itemName) {
+    try {
+      const job = await API.post('/jobs/music-import', { category, item_name: itemName });
+      JobPoller.track(job.id, { type: 'music_import', category, itemName });
+      JobsPanel.open();
+      toast(`Music import started — Job #${job.id}`, 'success');
+    } catch (e) {
+      toast(`Could not start music import: ${e.message}`, 'danger');
+    }
+  },
+
   async sync() {
     try {
       const job = await API.post('/sources/sync', {});
@@ -790,7 +810,7 @@ const JobPoller = {
       if (location.hash !== itemHash) return;
       if (ctx.type === 'extract') {
         Router.refresh();
-      } else if (ctx.type === 'move') {
+      } else if (ctx.type === 'move' || ctx.type === 'music_import') {
         Router.go(`/category/${enc(ctx.category)}`);
       }
     } catch (_) {}
