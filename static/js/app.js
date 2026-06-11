@@ -296,12 +296,14 @@ const Views = {
   async category(name) {
     this._loading();
 
-    // Fetch items; for movie categories also fetch existing matches in parallel
+    // Fetch items; for movie/music categories also fetch existing matches in parallel
     const isMovies = /movie/i.test(name);
+    const isMusic  = /music/i.test(name);
     let items, matchMap = {};
     try {
       const fetches = [API.get(`/categories/${enc(name)}/items`)];
       if (isMovies) fetches.push(API.get(`/movies/matches?category=${enc(name)}`));
+      if (isMusic)  fetches.push(API.get(`/music/matches?category=${enc(name)}`));
       [items, matchMap = {}] = await Promise.all(fetches);
     } catch (e) {
       this._setApp(`<div class="alert alert-danger mt-2">Failed to load items: ${esc(e.message)}</div>`);
@@ -321,16 +323,22 @@ const Views = {
 
     const rows = items.map(it => {
       const match = matchMap[it.name];
+      let matchLabel = '';
+      if (match) {
+        matchLabel = isMusic
+          ? `${match.artist} — ${match.album}${match.year ? ' (' + match.year + ')' : ''}`
+          : (match.formatted_name || '');
+      }
       return `
         <tr class="item-row" onclick="Router.go('/category/${enc(name)}/${enc(it.name)}')">
           <td>
             <i class="bi bi-folder me-2 text-warning"></i>${esc(it.name)}
-            ${match ? `<span class="ms-2 text-success small" title="${esc(match.formatted_name)}"><i class="bi bi-check-circle-fill"></i></span>` : ''}
+            ${match ? `<span class="ms-2 text-success small" title="${esc(matchLabel)}"><i class="bi bi-check-circle-fill"></i></span>` : ''}
           </td>
           <td class="text-secondary text-nowrap">${it.size_human}</td>
           <td class="text-nowrap">
             ${it.has_rar ? '<span class="badge bg-info badge-rar me-1"><i class="bi bi-archive me-1"></i>RAR</span>' : ''}
-            ${match ? `<span class="badge bg-success badge-rar">${esc(match.formatted_name)}</span>` : ''}
+            ${match ? `<span class="badge bg-success badge-rar">${esc(matchLabel)}</span>` : ''}
           </td>
         </tr>`;
     }).join('');
@@ -404,7 +412,7 @@ const Views = {
         <td class="text-secondary text-nowrap">${f.is_dir ? '—' : f.size_human}</td>
       </tr>`).join('');
 
-    this._setApp(crumb + (isMovies ? _matchPanelHtml() : '') + actionsHtml + `
+    this._setApp(crumb + (isMovies ? _matchPanelHtml() : '') + (isMusic ? _musicMatchPanelHtml() : '') + actionsHtml + `
       <div class="table-responsive">
         <table class="table table-hover table-dark file-table">
           <thead><tr class="text-secondary"><th>File</th><th>Size</th></tr></thead>
@@ -414,6 +422,9 @@ const Views = {
 
     if (isMovies) {
       MovieMatch.init(category, itemName, matchData);
+    }
+    if (isMusic) {
+      MusicMatch.init(category, itemName);
     }
   },
 };
@@ -597,6 +608,277 @@ const MovieMatch = {
 };
 
 function _matchEl(id) { return document.getElementById(id); }
+
+// ─────────────────────────────────────────────
+// Music match panel HTML template
+// ─────────────────────────────────────────────
+function _musicMatchPanelHtml() {
+  return `
+    <div class="card border-secondary mt-4" id="music-match-panel">
+      <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <span class="small fw-semibold"><i class="bi bi-vinyl me-2 text-danger"></i>Discogs Match</span>
+        <div id="music-match-status"></div>
+      </div>
+      <div class="card-body pb-2">
+        <div id="music-current-match"></div>
+        <div class="d-flex gap-2 mt-2 flex-wrap">
+          <input type="text" id="music-match-artist" class="form-control form-control-sm bg-dark text-white border-secondary"
+                 placeholder="Artist…" style="min-width:140px;flex:2"
+                 onkeydown="if(event.key==='Enter') MusicMatch.search()">
+          <input type="text" id="music-match-album" class="form-control form-control-sm bg-dark text-white border-secondary"
+                 placeholder="Album…" style="min-width:140px;flex:3"
+                 onkeydown="if(event.key==='Enter') MusicMatch.search()">
+          <button class="btn btn-sm btn-outline-secondary" onclick="MusicMatch.search()">
+            <i class="bi bi-search me-1"></i>Search
+          </button>
+        </div>
+        <div id="music-match-results" class="row g-2 mt-2"></div>
+        <div id="music-release-detail" class="mt-3" style="display:none"></div>
+      </div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────────
+// MusicMatch — Discogs lookup & persistence
+// ─────────────────────────────────────────────
+const MusicMatch = {
+  _category: null,
+  _item: null,
+  _results: [],
+
+  async init(category, item) {
+    this._category = category;
+    this._item = item;
+
+    // Load existing match + pre-fill tags in parallel
+    let matchResp, tagsResp;
+    try {
+      [matchResp, tagsResp] = await Promise.all([
+        API.get(`/music/match?category=${enc(category)}&item=${enc(item)}`),
+        API.get(`/music/tags?category=${enc(category)}&item=${enc(item)}`),
+      ]);
+    } catch (e) {
+      _mEl('music-match-results').innerHTML =
+        `<div class="col-12 text-danger small">${esc(e.message)}</div>`;
+      return;
+    }
+
+    if (tagsResp.artist) _mEl('music-match-artist').value = tagsResp.artist;
+    if (tagsResp.album)  _mEl('music-match-album').value  = tagsResp.album;
+
+    if (matchResp.match) {
+      this._renderMatch(matchResp.match);
+    }
+  },
+
+  async search() {
+    const artist = (_mEl('music-match-artist').value || '').trim();
+    const album  = (_mEl('music-match-album').value  || '').trim();
+    if (!artist && !album) return;
+
+    const resultsEl = _mEl('music-match-results');
+    const detailEl  = _mEl('music-release-detail');
+    detailEl.style.display = 'none';
+    resultsEl.innerHTML = `
+      <div class="col-12 text-secondary small py-2">
+        <span class="spinner-border spinner-border-sm me-2"></span>Searching Discogs…
+      </div>`;
+
+    let results;
+    try {
+      results = await API.get(
+        `/music/search?artist=${enc(artist)}&album=${enc(album)}&limit=12`
+      );
+    } catch (e) {
+      resultsEl.innerHTML =
+        `<div class="col-12 text-danger small">${esc(e.message)}</div>`;
+      return;
+    }
+
+    if (!results.length) {
+      resultsEl.innerHTML =
+        '<div class="col-12 text-secondary small">No results. Try adjusting artist or album.</div>';
+      return;
+    }
+
+    this._results = results;
+    resultsEl.innerHTML = results.map((r, i) => `
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <div class="card h-100 match-result-card" onclick="MusicMatch._selectIdx(${i})">
+          ${r.thumb
+            ? `<img src="${esc(r.thumb)}" class="card-img-top" alt=""
+                    style="aspect-ratio:1/1;object-fit:cover">`
+            : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark"
+                    style="aspect-ratio:1/1"><i class="bi bi-vinyl text-secondary" style="font-size:2rem"></i></div>`
+          }
+          <div class="card-body p-2">
+            <div class="small fw-semibold lh-sm text-truncate">${esc(r.title)}</div>
+            <div class="text-secondary lh-sm" style="font-size:.75rem">${esc(r.artist)}</div>
+            <div class="text-secondary" style="font-size:.7rem">
+              ${r.year ?? ''}${r.label ? ` · ${esc(r.label)}` : ''}
+            </div>
+            ${r.format ? `<div class="text-secondary" style="font-size:.65rem">${esc(r.format)}</div>` : ''}
+          </div>
+        </div>
+      </div>`).join('');
+  },
+
+  async _selectIdx(i) {
+    const r = this._results[i];
+    if (!r) return;
+
+    const detailEl  = _mEl('music-release-detail');
+    const resultsEl = _mEl('music-match-results');
+    detailEl.style.display = 'none';
+    detailEl.innerHTML = `
+      <div class="text-secondary small py-2">
+        <span class="spinner-border spinner-border-sm me-2"></span>Loading release…
+      </div>`;
+    detailEl.style.display = '';
+
+    let rel;
+    try {
+      rel = await API.get(`/music/release/${r.id}`);
+    } catch (e) {
+      detailEl.innerHTML = `<div class="text-danger small">${esc(e.message)}</div>`;
+      return;
+    }
+
+    // Merge search result cover with release detail cover
+    const cover = rel.cover_url || r.cover_image || r.thumb;
+
+    const trackRows = rel.tracks.length
+      ? rel.tracks.map(t => `
+          <tr>
+            <td class="text-secondary text-nowrap pe-3" style="font-size:.8rem">${esc(t.position)}</td>
+            <td style="font-size:.85rem">${esc(t.title)}</td>
+            <td class="text-secondary text-nowrap" style="font-size:.75rem">${esc(t.duration || '')}</td>
+          </tr>`).join('')
+      : '<tr><td colspan="3" class="text-secondary small">No tracklist available.</td></tr>';
+
+    detailEl.innerHTML = `
+      <div class="border border-secondary rounded p-3 bg-dark bg-opacity-50">
+        <div class="d-flex gap-3 align-items-start mb-3">
+          ${cover
+            ? `<img src="${esc(cover)}" alt="" class="flex-shrink-0 rounded" style="width:80px;height:80px;object-fit:cover">`
+            : `<div class="flex-shrink-0 rounded bg-dark d-flex align-items-center justify-content-center"
+                    style="width:80px;height:80px"><i class="bi bi-vinyl text-secondary" style="font-size:2rem"></i></div>`
+          }
+          <div class="flex-grow-1 min-w-0">
+            <div class="fw-semibold">${esc(rel.artist)} — ${esc(rel.title)}</div>
+            <div class="text-secondary small mt-1">
+              ${rel.year ? `<span class="me-2">${rel.year}</span>` : ''}
+              ${rel.label ? `<span class="me-2">${esc(rel.label)}${rel.catno ? ' · ' + esc(rel.catno) : ''}</span>` : ''}
+              ${rel.country ? `<span class="me-2">${esc(rel.country)}</span>` : ''}
+            </div>
+            ${rel.genres?.length ? `<div class="text-secondary" style="font-size:.75rem">${rel.genres.map(esc).join(' · ')}</div>` : ''}
+          </div>
+        </div>
+        <div class="table-responsive mb-3" style="max-height:200px;overflow-y:auto">
+          <table class="table table-dark table-sm mb-0 file-table">
+            <tbody>${trackRows}</tbody>
+          </table>
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-success btn-sm" onclick="MusicMatch._confirm(${rel.id})">
+            <i class="bi bi-check-lg me-1"></i>Confirm this match
+          </button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="MusicMatch._hideDetail()">
+            Cancel
+          </button>
+        </div>
+      </div>`;
+
+    // Store release data for confirm
+    this._pendingRelease = rel;
+    this._pendingCover   = cover;
+  },
+
+  _hideDetail() {
+    const d = _mEl('music-release-detail');
+    if (d) { d.style.display = 'none'; d.innerHTML = ''; }
+  },
+
+  async _confirm(releaseId) {
+    const rel = this._pendingRelease;
+    if (!rel || rel.id !== releaseId) return;
+
+    const genres = [...(rel.genres || []), ...(rel.styles || [])].join(', ') || null;
+
+    try {
+      const saved = await API.post('/music/match', {
+        category:    this._category,
+        item_name:   this._item,
+        discogs_id:  rel.id,
+        artist:      rel.artist,
+        album:       rel.title,
+        year:        rel.year ?? null,
+        label:       rel.label ?? null,
+        cover_url:   this._pendingCover ?? null,
+        genres:      genres,
+        country:     rel.country ?? null,
+        tracks_json: JSON.stringify(rel.tracks),
+      });
+      this._renderMatch(saved);
+      _mEl('music-match-results').innerHTML = '';
+      this._hideDetail();
+      toast(`Matched: ${rel.artist} — ${rel.title}`, 'success');
+    } catch (e) {
+      toast(`Failed to save match: ${e.message}`, 'danger');
+    }
+  },
+
+  async clear() {
+    try {
+      await API.del(`/music/match?category=${enc(this._category)}&item=${enc(this._item)}`);
+      _mEl('music-current-match').innerHTML = '';
+      _mEl('music-match-status').innerHTML  = '';
+      toast('Discogs match cleared', 'secondary');
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+  },
+
+  _renderMatch(match) {
+    _mEl('music-match-status').innerHTML =
+      '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Matched</span>';
+
+    const tracks = match.tracks || [];
+    const tracksHtml = tracks.length
+      ? `<div class="text-secondary mt-1" style="font-size:.75rem">
+           ${tracks.slice(0, 4).map(t => esc(t.title)).join(' · ')}
+           ${tracks.length > 4 ? `<em> +${tracks.length - 4} more</em>` : ''}
+         </div>`
+      : '';
+
+    _mEl('music-current-match').innerHTML = `
+      <div class="d-flex gap-3 align-items-start p-2 rounded mb-2
+                  bg-success bg-opacity-10 border border-success border-opacity-25">
+        ${match.cover_url
+          ? `<img src="${esc(match.cover_url)}" alt="" class="flex-shrink-0 rounded"
+                  style="width:54px;height:54px;object-fit:cover">`
+          : `<div class="flex-shrink-0 rounded bg-dark d-flex align-items-center justify-content-center"
+                  style="width:54px;height:54px"><i class="bi bi-vinyl text-secondary"></i></div>`
+        }
+        <div class="flex-grow-1 min-w-0">
+          <div class="fw-semibold">${esc(match.artist)} — ${esc(match.album)}</div>
+          <div class="text-secondary small">
+            ${match.year ? `<span class="me-2">${match.year}</span>` : ''}
+            ${match.label ? `<span class="me-2">${esc(match.label)}</span>` : ''}
+            ${match.country ? `<span>${esc(match.country)}</span>` : ''}
+          </div>
+          ${match.genres ? `<div class="text-secondary" style="font-size:.75rem">${esc(match.genres)}</div>` : ''}
+          ${tracksHtml}
+        </div>
+        <button class="btn btn-sm btn-outline-danger flex-shrink-0"
+                onclick="MusicMatch.clear()" title="Clear match">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>`;
+  },
+};
+
+function _mEl(id) { return document.getElementById(id); }
 
 // ─────────────────────────────────────────────
 // Actions

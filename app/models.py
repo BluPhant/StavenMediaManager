@@ -86,6 +86,30 @@ class MovieSearch(Base):
     queue_check_count = Column(Integer, default=0, nullable=False)
 
 
+class MusicMatch(Base):
+    """Discogs match confirmed for a music item in the incoming folder."""
+    __tablename__ = "music_matches"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    category   = Column(String(200), nullable=False)
+    item_name  = Column(String(500), nullable=False)
+    discogs_id = Column(Integer, nullable=False)
+    artist     = Column(String(500), nullable=False)
+    album      = Column(String(500), nullable=False)
+    year       = Column(Integer, nullable=True)
+    label      = Column(String(500), nullable=True)
+    cover_url  = Column(String(1000), nullable=True)
+    genres     = Column(String(500), nullable=True)   # comma-separated
+    country    = Column(String(100), nullable=True)
+    tracks_json = Column(Text, nullable=True)          # JSON [{position,title,duration}]
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("category", "item_name", name="uq_music_match_item"),
+    )
+
+
 class UpgradeReview(Base):
     """
     Pending review when a better copy of a movie replaces an existing one.

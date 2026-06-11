@@ -254,6 +254,38 @@ def run_music_import(job_id: int, source_path: str) -> None:
                     logger.info(f"Music import skipped (duplicate): {msg}")
                     return
 
+    # ── Discogs match: look up confirmed metadata for this item ─────────────
+    discogs_match = None
+    try:
+        from ..database import SessionLocal as _SL
+        from ..models import MusicMatch as _MM
+        _db = _SL()
+        try:
+            # item_name is the last component of source_path
+            _item = os.path.basename(folder.rstrip("/\\"))
+            # category is the parent folder name relative to incoming_dir
+            _cat = os.path.basename(os.path.dirname(folder.rstrip("/\\")))
+            discogs_match = _db.query(_MM).filter_by(category=_cat, item_name=_item).first()
+        finally:
+            _db.close()
+    except Exception as _exc:
+        logger.warning(f"Could not load Discogs match (non-fatal): {_exc}")
+
+    # ── Download cover from Discogs if none exists locally ───────────────────
+    if discogs_match and discogs_match.cover_url and not cover_file:
+        try:
+            from .discogs import DiscogsClient as _DC
+            cover_data = _DC().fetch_cover_bytes(discogs_match.cover_url)
+            cover_file = "cover.jpg"
+            cover_path = os.path.join(folder, cover_file)
+            with open(cover_path, "wb") as _f:
+                _f.write(cover_data)
+            update_job(job_id, progress=4, message="Downloaded cover art from Discogs.")
+            logger.info(f"Discogs cover saved → {cover_path}")
+        except Exception as _exc:
+            logger.warning(f"Discogs cover download failed (non-fatal): {_exc}")
+            cover_file = None
+
     # ── Pass 1/5 — Tag validation (FLACs only; hard stop on any failure) ──────
     if flacs:
         update_job(job_id, progress=5,
@@ -383,6 +415,10 @@ def run_music_import(job_id: int, source_path: str) -> None:
     if year:
         ym = _YEAR_RE.search(year)
         year = ym.group(1) if ym else None
+    # Fall back to Discogs year if file tags have none
+    if not year and discogs_match and discogs_match.year:
+        year = str(discogs_match.year)
+        logger.info(f"Using Discogs year {year} (no date tag in audio files).")
 
     artist_safe = _sanitize(artist)
     album_safe  = _sanitize(album)

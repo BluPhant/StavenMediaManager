@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # BTN_API_KEY   API key from your BTN profile → Manage API Keys
     btn_api_key: str = ""
 
+    # ── Discogs (optional) — personal access token for music metadata ────────
+    # DISCOGS_TOKEN — get one at https://www.discogs.com/settings/developers
+    discogs_token: str = ""
+
     # ── Build info (injected by Docker ARG→ENV at image build time) ───────────
     app_version:    str = "dev"
     app_revision:   str = ""
