@@ -139,7 +139,9 @@ def confirm_movie(req: ConfirmRequest, db: Session = Depends(get_db)):
     runtime_min  = details.get("runtime") or 120
     ipt_info     = _search_ipt(imdb_id,
                                runtime_minutes=runtime_min,
-                               current_plex_rank=plex_rank)
+                               current_plex_rank=plex_rank,
+                               title=details.get("title", ""),
+                               year=details.get("year"))
 
     # 3. Determine status + upgrade flag
     status            = _determine_status(plex_info, sbx_info, ipt_info)
@@ -514,13 +516,17 @@ def _score_result(r, runtime_minutes: int) -> float:
 
 
 def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
-                current_plex_rank: int = -1) -> dict:
+                current_plex_rank: int = -1,
+                title: str = "", year: int | None = None) -> dict:
     """
     Search IPT by IMDB ID, score results, and return:
     - results:      quality-filtered & scored list (above current Plex quality if upgrading)
     - all_results:  full scored list (for "show all" toggle)
     - best:         top-scored result from the filtered set
     - filtered_by_quality: True when upgrade filter is active
+
+    Falls back to a title+year text search if the IMDB ID lookup returns 0
+    results — this handles torrents that IPT hasn't indexed under the IMDB ID.
     """
     from ..services.iptorrents import IPTorrentsClient
     ipt = IPTorrentsClient()
@@ -536,6 +542,13 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
         raw = ipt.search_by_imdb_id(imdb_id, category="movies", resolution=res_param)
         # Strip CAM / TS / Screener (word-boundary safe — won't catch "BATS")
         raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
+        if not raw and title:
+            # IPT didn't return results for the IMDB ID — fall back to title search.
+            # Some torrents aren't tagged with their IMDB ID in IPT's index.
+            q = f"{title} {year}" if year else title
+            raw = ipt.search(query=q, category="movies", limit=100)
+            raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
+            logger.info(f"IPT IMDB fallback to title search '{q}': {len(raw)} results")
         if not raw:
             return {**_empty, "configured": True}
 
