@@ -546,7 +546,11 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
         if not raw and title:
             # IPT didn't return results for the IMDB ID — fall back to title search.
             # Some torrents aren't tagged with their IMDB ID in IPT's index.
-            q = f"{title} {year}" if year else title
+            # Strip punctuation that appears in TMDB titles but not torrent filenames
+            # (e.g. "Beat: The Story" → "Beat The Story" so _title_matches doesn't
+            # look for the literal word "beat:" with colon attached).
+            clean_title = " ".join(re.sub(r"[^\w\s]", " ", title).split())
+            q = f"{clean_title} {year}" if year else clean_title
             raw = ipt.search(query=q, category="movies", limit=100)
             raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
             search_method = "title"
