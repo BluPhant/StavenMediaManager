@@ -749,6 +749,13 @@ const JobsPanel = {
     const badge = document.getElementById('jobs-badge');
     document.getElementById('active-job-count').textContent = active.length;
     badge.classList.toggle('d-none', active.length === 0);
+    badge.classList.toggle('jobs-badge-pulse', active.length > 0);
+
+    const panelCount = document.getElementById('jobs-panel-count');
+    if (panelCount) {
+      panelCount.textContent = active.length > 0 ? `· ${active.length} running` : '';
+      panelCount.classList.toggle('d-none', active.length === 0);
+    }
 
     const list = document.getElementById('jobs-list');
     if (!jobs.length) {

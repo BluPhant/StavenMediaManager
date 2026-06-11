@@ -79,6 +79,15 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* ── Jobs badge pulse (active jobs) ── */
+@keyframes badge-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.55); }
+  60%       { box-shadow: 0 0 0 7px rgba(255, 193, 7, 0); }
+}
+.jobs-badge-pulse {
+  animation: badge-pulse 1.6s ease-out infinite;
+}
+
 /* ── Breadcrumbs ── */
 .breadcrumb-item a {
   text-decoration: none;
