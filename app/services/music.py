@@ -34,6 +34,7 @@ import re
 import shutil
 import subprocess
 import threading
+import urllib.parse
 import urllib.request
 
 from ..config import settings
@@ -118,6 +119,86 @@ def _sanitize(s: str) -> str:
     return _ILLEGAL_RE.sub("_", s).strip(" .")
 
 
+# ── Duplicate detection ───────────────────────────────────────────────────────
+
+def _check_duplicate(artist_safe: str, album_safe: str, year: str | None) -> tuple[bool, str]:
+    """
+    Return (is_duplicate, reason_string).
+
+    Fast path  — exact dest_dir already exists with MP3s.
+    Fuzzy path — any subdirectory under the artist folder whose name starts with
+                 "Artist - Album" (handles year variations / missing year).
+    Plex path  — album title search in the Plex music section (best-effort).
+    """
+    letter     = artist_safe[0].upper() if artist_safe and artist_safe[0].isalpha() else "#"
+    music_root = os.path.join(settings.media_dir, dest_subdir("music"))
+
+    # Fast: exact destination
+    folder_name = (f"{artist_safe} - {album_safe} ({year})" if year
+                   else f"{artist_safe} - {album_safe}")
+    exact = os.path.join(music_root, letter, artist_safe, folder_name)
+    if os.path.isdir(exact):
+        mp3s = [f for f in os.listdir(exact) if f.lower().endswith(".mp3")]
+        if mp3s:
+            return True, f"filesystem — {exact} ({len(mp3s)} track(s))"
+
+    # Fuzzy: any Artist - Album* folder under the artist dir
+    artist_dir = os.path.join(music_root, letter, artist_safe)
+    if os.path.isdir(artist_dir):
+        prefix = f"{artist_safe} - {album_safe}".lower()
+        for name in os.listdir(artist_dir):
+            if name.lower().startswith(prefix):
+                fp = os.path.join(artist_dir, name)
+                if os.path.isdir(fp):
+                    mp3s = [f for f in os.listdir(fp) if f.lower().endswith(".mp3")]
+                    if mp3s:
+                        return True, f"filesystem — {fp} ({len(mp3s)} track(s))"
+
+    # Plex: best-effort, non-fatal
+    if settings.plex_url and settings.plex_token:
+        try:
+            match = _plex_music_match(artist_safe, album_safe)
+            if match:
+                return True, f"Plex — {match}"
+        except Exception as exc:
+            logger.warning(f"Plex music duplicate check skipped (non-fatal): {exc}")
+
+    return False, ""
+
+
+def _plex_music_match(artist: str, album: str) -> str | None:
+    """Return a description if artist+album exists in the Plex music library, else None."""
+    base  = settings.plex_url.rstrip("/")
+    token = settings.plex_token
+
+    # Locate the music section (type=artist)
+    url = f"{base}/library/sections?X-Plex-Token={token}"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=8) as resp:  # noqa: S310
+        sections = json.loads(resp.read()).get("MediaContainer", {}).get("Directory") or []
+
+    sid = next((s["key"] for s in sections if s.get("type") == "artist"), None)
+    if not sid:
+        return None
+
+    # Search albums by title
+    q   = urllib.parse.quote(album)
+    url = f"{base}/library/sections/{sid}/all?type=9&title={q}&X-Plex-Token={token}"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=8) as resp:  # noqa: S310
+        items = json.loads(resp.read()).get("MediaContainer", {}).get("Metadata") or []
+
+    al = album.lower()
+    ar = artist.lower()
+    for item in items:
+        parent = (item.get("parentTitle") or "").lower()
+        title  = (item.get("title") or "").lower()
+        if al in title and (ar in parent or parent in ar):
+            return f"{item.get('parentTitle', '')} — {item.get('title', '')}"
+
+    return None
+
+
 # ── main entry point ──────────────────────────────────────────────────────────
 
 def run_music_import(job_id: int, source_path: str) -> None:
@@ -140,6 +221,38 @@ def run_music_import(job_id: int, source_path: str) -> None:
     cover_file = next(
         (f for f in entries if os.path.splitext(f)[1].lower() in _COVER_EXTS), None
     )
+
+    # ── Pre-flight: duplicate detection — read tags from first audio file ──────
+    # Check before doing any heavy work so we never modify or move files for a
+    # release that is already in the library or in Plex.
+    update_job(job_id, progress=3, message="Pre-flight — checking for existing copy…")
+    first_audio = next(
+        (f for f in entries if f.lower().endswith(".flac") or f.lower().endswith(".mp3")),
+        None,
+    )
+    if first_audio:
+        pre_probe = _probe(os.path.join(folder, first_audio))
+        if pre_probe:
+            pre_tags    = _tags(pre_probe)
+            pre_artist  = _tag(pre_tags, "albumartist", "artist")
+            pre_album   = _tag(pre_tags, "album")
+            pre_year_r  = _tag(pre_tags, "date", "year")
+            pre_year    = None
+            if pre_year_r:
+                ym = _YEAR_RE.search(pre_year_r)
+                pre_year = ym.group(1) if ym else None
+
+            if pre_artist and pre_album:
+                is_dup, reason = _check_duplicate(
+                    _sanitize(pre_artist), _sanitize(pre_album), pre_year
+                )
+                if is_dup:
+                    msg = (f"SKIPPED — {pre_artist} — {pre_album}"
+                           + (f" ({pre_year})" if pre_year else "")
+                           + f": {reason}. Source kept at {folder}.")
+                    update_job(job_id, status="done", progress=100, message=msg)
+                    logger.info(f"Music import skipped (duplicate): {msg}")
+                    return
 
     # ── Pass 1/5 — Tag validation (FLACs only; hard stop on any failure) ──────
     if flacs:
