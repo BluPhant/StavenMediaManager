@@ -1374,6 +1374,7 @@ const MovieDiscover = {
   _grabbing: false,
   _plexCheckToken: null,   // cancel token for lazy Plex badge loading
   _showAllQualities: false,
+  _showIptOverride: false, // show IPT even when movie is already 4K in Plex
 
   async render(tab) {
     this._tab = tab || this._tab || 'search';
@@ -1480,6 +1481,7 @@ const MovieDiscover = {
     if (!candidate) return;
     this._plexCheckToken = null;   // cancel any running badge checks
     this._showAllQualities = false;
+    this._showIptOverride  = false;
     const panel = document.getElementById('movie-confirm-panel');
     panel.innerHTML = '<div class="text-secondary small py-3"><div class="spinner-border spinner-border-sm me-2"></div>Checking all systems…</div>';
     document.getElementById('movie-search-results').innerHTML = '';
@@ -1510,20 +1512,7 @@ const MovieDiscover = {
          </div>`
       : '';
 
-    // Build IPT results table
-    let iptHtml = '';
-    if (d.ipt?.results?.length || d.ipt?.all_results?.length) {
-      iptHtml = MovieDiscover._renderIptTable(d, false);
-    } else if (d.ipt?.configured) {
-      iptHtml = `
-        <div class="mt-3 text-secondary small">
-          Not found on IPT.
-          <button class="btn btn-sm btn-outline-secondary ms-2"
-                  onclick="MovieDiscover._queueThis()">
-            <i class="bi bi-clock me-1"></i>Watch for it
-          </button>
-        </div>`;
-    }
+    const iptHtml = MovieDiscover._buildIptSection(d);
 
     panel.innerHTML = `
       <div class="card border-secondary mt-3">
@@ -1759,18 +1748,58 @@ const MovieDiscover = {
       </div>`;
   },
 
+  _buildIptSection(d) {
+    // If the movie is already at 4K in Plex and the user hasn't asked to see
+    // IPT anyway, replace the table with a single "already good" note.
+    const has4k = d.plex?.found && /^(2160p|4k|uhd)$/i.test(d.plex.resolution || '');
+    if (has4k && !this._showIptOverride) {
+      return `
+        <div class="mt-3 small text-secondary">
+          <i class="bi bi-check-circle-fill text-success me-1"></i>
+          Already in Plex at 4K.
+          <button class="btn btn-link btn-sm p-0 ms-1" style="font-size:.8rem"
+                  onclick="MovieDiscover._toggleIptOverride()">
+            Search IPT anyway
+          </button>
+        </div>`;
+    }
+    if (d.ipt?.results?.length || d.ipt?.all_results?.length) {
+      return MovieDiscover._renderIptTable(d, this._showAllQualities);
+    }
+    if (d.ipt?.configured) {
+      return `
+        <div class="mt-3 text-secondary small">
+          Not found on IPT.
+          <button class="btn btn-sm btn-outline-secondary ms-2"
+                  onclick="MovieDiscover._queueThis()">
+            <i class="bi bi-clock me-1"></i>Watch for it
+          </button>
+        </div>`;
+    }
+    return '';
+  },
+
+  _toggleIptOverride() {
+    this._showIptOverride = true;
+    const iptSection = document.getElementById('movie-ipt-section');
+    if (iptSection && this._confirmed) {
+      iptSection.innerHTML = this._buildIptSection(this._confirmed);
+    }
+  },
+
   _toggleAllQualities() {
     this._showAllQualities = !this._showAllQualities;
     if (!this._confirmed) return;
     const iptSection = document.getElementById('movie-ipt-section');
     if (iptSection) {
-      iptSection.innerHTML = this._renderIptTable(this._confirmed, this._showAllQualities);
+      iptSection.innerHTML = this._buildIptSection(this._confirmed);
     }
   },
 
   _clearConfirm() {
     this._confirmed = null;
     this._showAllQualities = false;
+    this._showIptOverride  = false;
     this._plexCheckToken = null;
     this._renderSearch(document.getElementById('movie-tab-body'));
   },
