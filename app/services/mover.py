@@ -52,19 +52,26 @@ def run_move(job_id: int, source_path: str, formatted_name: str,
 
     try:
         # ── Upgrade detection ─────────────────────────────────────────────────
-        # If dest already has video files and this is a movie, trash the old copy
-        # and create an UpgradeReview so the user can confirm or revert.
+        # Find any existing copy of this movie before creating dest_dir.
+        # Priority: plex_path from DB (reliable even when folder names differ,
+        # e.g. "National Lampoons Vacation" vs "National Lampoon's Vacation")
+        # → fallback: check dest_dir itself (covers same-name moves).
         is_movie = category.lower() in ("movies", "movie")
         upgrade_review_id = None
-        if is_movie and os.path.isdir(dest_dir):
-            existing = os.listdir(dest_dir)
-            video_files = [f for f in existing if _is_video(f)]
-            if video_files:
-                update_job(job_id, progress=6,
-                           message=f"Existing copy found — moving to trash…")
-                upgrade_review_id = _trash_old_copy(
-                    dest_dir, formatted_name, imdb_id, video_files
-                )
+        if is_movie:
+            old_dir = None
+            if imdb_id:
+                old_dir = _find_existing_movie_folder(imdb_id)
+            if not old_dir and os.path.isdir(dest_dir):
+                old_dir = dest_dir
+            if old_dir and os.path.isdir(old_dir):
+                video_files = [f for f in os.listdir(old_dir) if _is_video(f)]
+                if video_files:
+                    update_job(job_id, progress=6,
+                               message=f"Existing copy found — moving to trash…")
+                    upgrade_review_id = _trash_old_copy(
+                        old_dir, formatted_name, imdb_id, video_files
+                    )
 
         os.makedirs(dest_dir, exist_ok=True)
 
@@ -176,18 +183,26 @@ def _main_video_file(folder: str) -> tuple[str | None, int]:
     return best_name, best_size
 
 
-def _trash_old_copy(dest_dir: str, formatted_name: str,
+def _trash_old_copy(old_dir: str, formatted_name: str,
                     imdb_id: str, video_files: list[str]) -> int | None:
     """
-    Move existing files from dest_dir to the .trash subfolder.
-    Creates an UpgradeReview DB record.  Returns review ID or None on error.
+    Move all files from old_dir to the .trash subfolder and remove the
+    (now-empty) old_dir.  Creates an UpgradeReview DB record.
+    Returns review ID or None on error.
+    old_dir may differ from the new dest_dir when a folder was named
+    differently (e.g. apostrophe vs no apostrophe).
     """
     subdir    = "movies"   # only called for movie category
     trash_dir = os.path.join(settings.media_dir, subdir, ".trash", formatted_name)
     try:
         os.makedirs(trash_dir, exist_ok=True)
-        for name in os.listdir(dest_dir):
-            shutil.move(os.path.join(dest_dir, name), os.path.join(trash_dir, name))
+        for name in os.listdir(old_dir):
+            shutil.move(os.path.join(old_dir, name), os.path.join(trash_dir, name))
+        # Remove the now-empty old folder (may have a different name than dest_dir)
+        try:
+            os.rmdir(old_dir)
+        except OSError:
+            pass
 
         old_fname, old_size = _main_video_file(trash_dir)
         old_res = _extract_res(old_fname or "")
@@ -200,7 +215,7 @@ def _trash_old_copy(dest_dir: str, formatted_name: str,
                 imdb_id      = imdb_id or None,
                 title        = formatted_name,
                 old_path     = trash_dir,
-                new_path     = dest_dir,
+                new_path     = None,
                 old_filename = old_fname,
                 new_filename = None,    # filled in after new files land
                 old_size_bytes = old_size or None,
@@ -243,3 +258,51 @@ def _update_review_new_file(review_id: int, dest_dir: str) -> None:
         )
     finally:
         db.close()
+
+
+# ── Plex-path translation ─────────────────────────────────────────────────────
+
+def _find_existing_movie_folder(imdb_id: str) -> str | None:
+    """
+    Look up the Plex-reported file path for a movie stored in movie_searches and
+    translate it to a local folder path.  Returns None if not found or the folder
+    no longer exists on disk.
+    """
+    from ..database import SessionLocal
+    from ..models import MovieSearch
+    db = SessionLocal()
+    try:
+        record = db.query(MovieSearch).filter(MovieSearch.imdb_id == imdb_id).first()
+        if not record or not record.plex_path:
+            return None
+        return _translate_plex_path(record.plex_path)
+    except Exception as exc:
+        logger.warning(f"Could not look up existing folder for {imdb_id}: {exc}")
+        return None
+    finally:
+        db.close()
+
+
+def _translate_plex_path(plex_file_path: str) -> str | None:
+    """
+    Convert a Plex-reported file path to a local filesystem folder path.
+
+    Plex mounts the media share under its own prefix (e.g. /data/) while SMM
+    uses settings.media_dir (/media/).  We find the known category subdirectory
+    in the Plex path (movies, tv, music, …) and rebase everything from that
+    point onto settings.media_dir.  Returns the parent directory (the movie
+    folder), not the file itself.
+
+    Example:
+        /data/movies/National Lampoons Vacation (1983)/file.mkv
+        → /media/movies/National Lampoons Vacation (1983)
+    """
+    norm  = plex_file_path.replace("\\", "/")
+    parts = [p for p in norm.split("/") if p]
+    for subdir in set(DEST_MAP.values()):
+        if subdir in parts:
+            idx        = parts.index(subdir)
+            local_path = os.path.join(settings.media_dir, *parts[idx:])
+            folder     = os.path.dirname(local_path)
+            return folder if os.path.isdir(folder) else None
+    return None
