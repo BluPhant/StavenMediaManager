@@ -1157,7 +1157,7 @@ const JobPoller = {
       if (ctx.type === 'extract') {
         Router.refresh();
       } else if (ctx.type === 'move' || ctx.type === 'music_import') {
-        Router.go(`/category/${enc(ctx.category)}`);
+        Router.go('/');
       }
     } catch (_) {}
   },
