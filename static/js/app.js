@@ -1679,6 +1679,22 @@ const MovieDiscover = {
          </div>`
       : '';
 
+    const titleMatchBanner = ipt.search_method === 'title'
+      ? `<div class="alert alert-warning py-2 small mb-2 d-flex align-items-center gap-2">
+           <i class="bi bi-exclamation-triangle-fill flex-shrink-0"></i>
+           <span>
+             <strong>Title match only</strong> — IPT has no IMDB ID indexed for this torrent.
+             Results are matched by title and may not be the correct film.
+             ${d.imdb_id
+               ? `<a href="https://www.imdb.com/title/${esc(d.imdb_id)}/" target="_blank"
+                     rel="noopener" class="ms-1 text-warning">
+                    Verify on IMDB <i class="bi bi-box-arrow-up-right" style="font-size:.7rem"></i>
+                  </a>`
+               : ''}
+           </span>
+         </div>`
+      : '';
+
     if (!results.length) {
       const noMsg = ipt.filtered_by_quality && !showAll
         ? `No copies above ${esc(ipt.current_plex_resolution||'?')} found on IPT.
@@ -1689,7 +1705,7 @@ const MovieDiscover = {
            <button class="btn btn-sm btn-outline-secondary ms-2" onclick="MovieDiscover._queueThis()">
              <i class="bi bi-clock me-1"></i>Watch for it
            </button>`;
-      return `<div class="mt-3 text-secondary small">${filterBanner}${noMsg}</div>`;
+      return `<div class="mt-3 text-secondary small">${titleMatchBanner}${filterBanner}${noMsg}</div>`;
     }
 
     const rows = results.map((r, idx) => {
@@ -1731,7 +1747,7 @@ const MovieDiscover = {
              style="letter-spacing:.05em">
           <span>Available on IPT</span>${runtime}
         </div>
-        ${filterBanner}
+        ${titleMatchBanner}${filterBanner}
         <div class="table-responsive">
           <table class="table table-dark table-hover table-sm align-middle mb-0">
             <thead class="text-secondary">

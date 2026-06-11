@@ -542,12 +542,14 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
         raw = ipt.search_by_imdb_id(imdb_id, category="movies", resolution=res_param)
         # Strip CAM / TS / Screener (word-boundary safe — won't catch "BATS")
         raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
+        search_method = "imdb"
         if not raw and title:
             # IPT didn't return results for the IMDB ID — fall back to title search.
             # Some torrents aren't tagged with their IMDB ID in IPT's index.
             q = f"{title} {year}" if year else title
             raw = ipt.search(query=q, category="movies", limit=100)
             raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
+            search_method = "title"
             logger.info(f"IPT IMDB fallback to title search '{q}': {len(raw)} results")
         if not raw:
             return {**_empty, "configured": True}
@@ -568,6 +570,7 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
 
         return {
             "configured":              True,
+            "search_method":           search_method,
             "results":                 [_serialize_ipt(r, runtime_minutes) for r in filtered],
             "all_results":             [_serialize_ipt(r, runtime_minutes) for r in scored],
             "best":                    _serialize_ipt(best, runtime_minutes) if best else None,
