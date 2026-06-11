@@ -105,7 +105,7 @@ const Views = {
     try {
       [cats, history, syncStatus] = await Promise.all([
         API.get('/categories'),
-        API.get('/jobs?job_type=move&status=done&limit=20'),
+        API.get('/jobs?status=done&limit=15'),
         API.get('/sources/status').catch(() => null),
       ]);
     } catch (e) {
@@ -113,132 +113,184 @@ const Views = {
       return;
     }
 
-    // ── Sync bar + active torrents (shown only when rTorrent is configured) ──
-    let syncHtml = '';
-    if (syncStatus && syncStatus.rtorrent && syncStatus.rtorrent.configured) {
-      const rt = syncStatus.rtorrent;
+    const processed = history.filter(j => ['move', 'music_import'].includes(j.type));
+    const hasSeedbox = !!(syncStatus?.rtorrent?.configured);
 
-      // Fetch active (in-progress) torrents from seedbox
-      let activeHtml = '';
-      try {
-        const active = await API.get('/sources/active');
-        if (active.length) {
-          const rows = active.map(t => {
-            const pct    = t.pct;
-            const done   = _humanSize(t.bytes_done);
-            const total  = _humanSize(t.size_bytes);
-            const speed  = t.down_rate > 0 ? `<span class="text-success small">${_humanSize(t.down_rate)}/s</span>` : '';
-            const barCls = t.is_active ? 'bg-info progress-bar-animated progress-bar-striped' : 'bg-secondary';
-            return `
-              <div class="mb-2">
-                <div class="d-flex justify-content-between align-items-baseline mb-1">
-                  <span class="small text-truncate me-2" style="max-width:55%">${esc(t.name)}</span>
-                  <span class="text-secondary small text-nowrap">${done} / ${total} &nbsp; ${speed}</span>
-                  <button class="btn btn-sm btn-outline-danger ms-2 py-0 px-1" style="font-size:.7rem;line-height:1.4"
-                          onclick="Actions.stopTorrent('${esc(t.hash)}', this)" title="Stop torrent">
+    let active = [];
+    if (hasSeedbox) {
+      try { active = await API.get('/sources/active'); } catch (_) {}
+    }
+
+    // ── Hero: recent movie chips ─────────────────────────────────────────────
+    const recentMovieTitles = processed
+      .filter(j => j.type === 'move' && /movie/i.test(j.category || ''))
+      .slice(0, 3)
+      .map(j => {
+        if (j.dest_path) {
+          const parts = j.dest_path.replace(/\\/g, '/').split('/').filter(Boolean);
+          return parts[parts.length - 1] || j.item_name;
+        }
+        return j.item_name;
+      })
+      .filter(Boolean);
+
+    const chipHtml = recentMovieTitles.length
+      ? `<div class="d-flex align-items-center gap-2 flex-wrap mt-2">
+           ${recentMovieTitles.map(t => `
+             <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                     style="font-size:.75rem"
+                     onclick="MovieDiscover.searchFor(${jsStr(t)})">
+               ${esc(t)}
+             </button>`).join('')}
+           <span class="text-secondary" style="font-size:.7rem">recent</span>
+         </div>`
+      : '';
+
+    const heroHtml = `
+      <div class="card border-secondary mb-3">
+        <div class="card-body p-3">
+          <div class="text-secondary small mb-2 d-flex align-items-center gap-2">
+            <i class="bi bi-film text-info"></i>Find a movie
+          </div>
+          <div class="d-flex gap-2">
+            <input id="home-movie-search" type="text" class="form-control"
+                   placeholder="Title, IMDB ID, or year…"
+                   onkeydown="if(event.key==='Enter') MovieDiscover.searchFor(this.value.trim())">
+            <button class="btn btn-info text-nowrap"
+                    onclick="MovieDiscover.searchFor(document.getElementById('home-movie-search').value.trim())">
+              <i class="bi bi-search me-1"></i>Search
+            </button>
+          </div>
+          ${chipHtml}
+        </div>
+      </div>`;
+
+    // ── Seedbox card ─────────────────────────────────────────────────────────
+    let seedboxHtml = '';
+    if (hasSeedbox) {
+      const rt = syncStatus.rtorrent;
+      let progressHtml = '';
+      if (active.length) {
+        const bars = active.map(t => {
+          const done  = _humanSize(t.bytes_done);
+          const total = _humanSize(t.size_bytes);
+          const speed = t.down_rate > 0
+            ? `<span class="text-success ms-2" style="font-size:.75rem">${_humanSize(t.down_rate)}/s</span>` : '';
+          const barCls = t.is_active
+            ? 'progress-bar bg-info progress-bar-animated progress-bar-striped' : 'progress-bar bg-secondary';
+          const label = t.name.length > 54 ? t.name.slice(0, 54) + '…' : t.name;
+          return `
+            <div class="mb-2">
+              <div class="d-flex justify-content-between align-items-baseline gap-2 mb-1">
+                <span class="small text-truncate" style="min-width:0">${esc(label)}</span>
+                <span class="text-secondary text-nowrap flex-shrink-0" style="font-size:.75rem">
+                  ${done} / ${total}${speed}
+                  <button class="btn btn-link text-danger p-0 ms-1" style="font-size:.7rem;line-height:1"
+                          onclick="Actions.stopTorrent('${esc(t.hash)}', this)" title="Stop">
                     <i class="bi bi-stop-fill"></i>
                   </button>
-                </div>
-                <div class="progress" style="height:6px">
-                  <div class="progress-bar ${barCls}" style="width:${pct}%" role="progressbar"></div>
-                </div>
-              </div>`;
-          }).join('');
-
-          activeHtml = `
-            <div class="mb-3 p-3 rounded border border-secondary" style="background:rgba(255,255,255,.02)">
-              <div class="text-secondary small mb-2 text-uppercase fw-semibold" style="letter-spacing:.06em">
-                <i class="bi bi-arrow-down-circle me-1 text-info"></i>Seedbox Downloading (${active.length})
+                </span>
               </div>
-              ${rows}
+              <div class="progress" style="height:5px">
+                <div class="${barCls}" style="width:${t.pct}%" role="progressbar"></div>
+              </div>
             </div>`;
-        }
-      } catch (_) {}
-
-      syncHtml = `
-        <div class="d-flex align-items-center gap-3 mb-3 p-3 rounded border border-secondary"
-             style="background:rgba(255,255,255,.03)">
-          <i class="bi bi-cloud-download text-info fs-5"></i>
-          <div class="flex-grow-1">
-            <span class="fw-semibold small">Seedbox Sync</span>
-            <span class="text-secondary small ms-2">
-              tag: <code class="text-info">${esc(rt.tag)}</code>
-              &nbsp;·&nbsp; ${esc(rt.ssh_host)}
-            </span>
+        }).join('');
+        progressHtml = `<hr class="border-secondary my-2">${bars}`;
+      }
+      seedboxHtml = `
+        <div class="card border-secondary mb-3">
+          <div class="card-body p-3">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+              <div class="small d-flex align-items-center gap-2">
+                <span class="text-success" style="font-size:.6rem">&#9679;</span>
+                <span class="text-secondary">tag: <code class="text-info">${esc(rt.tag)}</code></span>
+                ${rt.ssh_host ? `<span class="text-secondary" style="font-size:.8rem">${esc(rt.ssh_host)}</span>` : ''}
+              </div>
+              <div class="d-flex gap-2">
+                <button class="btn btn-sm btn-outline-info" onclick="Actions.sync()">
+                  <i class="bi bi-arrow-repeat me-1"></i>Sync now
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="Actions.previewSync()">
+                  <i class="bi bi-eye me-1"></i>Preview
+                </button>
+              </div>
+            </div>
+            ${progressHtml}
           </div>
-          <button class="btn btn-sm btn-outline-info" onclick="Actions.sync()">
-            <i class="bi bi-arrow-repeat me-1"></i>Sync Now
-          </button>
-          <button class="btn btn-sm btn-outline-secondary" onclick="Actions.previewSync()">
-            <i class="bi bi-eye me-1"></i>Preview
-          </button>
-        </div>
-        ${activeHtml}`;
+        </div>`;
     }
 
-    // ── Category grid ──────────────────────────────────────────────────────
-    let catHtml = '';
-    if (!cats.length) {
-      catHtml = `
-        <div class="text-center py-5 empty-state">
-          <i class="bi bi-folder-x"></i>
-          <p class="mt-3">No categories found in the incoming directory.<br>
-          <small class="text-secondary">Create subdirectories inside the mounted incoming path.</small></p>
-        </div>`;
-    } else {
-      const cards = cats.map(c => {
+    // ── Incoming categories as pills ─────────────────────────────────────────
+    let catsHtml = '';
+    if (cats.length) {
+      const pills = cats.map(c => {
         const { icon, color } = categoryIcon(c.name);
+        const badge = c.item_count > 0
+          ? `<span class="badge bg-info text-dark ms-auto" style="font-size:.65rem">${c.item_count}</span>` : '';
         return `
-          <div class="col-6 col-sm-4 col-md-3 col-xl-2">
-            <div class="card category-card text-center p-3 h-100"
-                 onclick="Router.go('/category/${enc(c.name)}')">
-              <div class="category-icon ${color}"><i class="bi ${icon}"></i></div>
-              <div class="fw-semibold mt-2">${esc(c.name)}</div>
-              <div class="text-secondary small mt-1">${c.item_count} item${c.item_count !== 1 ? 's' : ''}</div>
-            </div>
+          <div class="d-flex align-items-center gap-2 px-3 py-2 rounded border border-secondary"
+               style="cursor:pointer;background:rgba(255,255,255,.025)"
+               onclick="Router.go('/category/${enc(c.name)}')">
+            <i class="bi ${icon} ${color}" style="font-size:.95rem"></i>
+            <span class="small">${esc(c.name)}</span>
+            ${badge}
           </div>`;
       }).join('');
-      catHtml = `
-        <h6 class="text-secondary mb-3 text-uppercase" style="letter-spacing:.08em">Incoming Categories</h6>
-        <div class="row g-3 mb-4">${cards}</div>`;
-    }
-
-    // ── Processed history ──────────────────────────────────────────────────
-    let histHtml = '';
-    if (history.length) {
-      const rows = history.map(j => {
-        const title = j.dest_path ? j.dest_path.split('/').filter(Boolean).pop() : j.item_name;
-        const dest  = j.dest_path || '—';
-        const date  = j.created_at ? new Date(j.created_at).toLocaleDateString() : '—';
-        return `
-          <tr>
-            <td class="fw-semibold">${esc(title)}</td>
-            <td class="text-secondary text-capitalize">${esc(j.category)}</td>
-            <td class="text-secondary font-monospace small">${esc(dest)}</td>
-            <td class="text-secondary text-nowrap">${date}</td>
-            <td>
-              <button class="btn btn-sm btn-link text-secondary p-0"
-                      onclick="JobsPanel.remove(${j.id})" title="Remove from history">
-                <i class="bi bi-x-lg"></i>
-              </button>
-            </td>
-          </tr>`;
-      }).join('');
-      histHtml = `
-        <h6 class="text-secondary mb-3 text-uppercase" style="letter-spacing:.08em">
-          <i class="bi bi-check2-circle me-2"></i>Processed
-        </h6>
-        <div class="table-responsive">
-          <table class="table table-dark table-hover file-table">
-            <thead class="text-secondary">
-              <tr><th>Title</th><th>Category</th><th>Destination</th><th>Date</th><th></th></tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
+      catsHtml = `
+        <div class="text-secondary small fw-semibold text-uppercase mb-2" style="letter-spacing:.06em">Incoming</div>
+        <div class="d-flex flex-wrap gap-2">${pills}</div>`;
+    } else {
+      catsHtml = `
+        <div class="text-center py-4 text-secondary small">
+          <i class="bi bi-folder-x fs-3 d-block mb-2"></i>
+          No incoming items
         </div>`;
     }
 
-    this._setApp(syncHtml + catHtml + histHtml);
+    // ── Recently processed (right column) ────────────────────────────────────
+    let recentHtml = '';
+    if (processed.length) {
+      const rows = processed.slice(0, 8).map(j => {
+        let title = j.item_name;
+        if (j.dest_path) {
+          const parts = j.dest_path.replace(/\\/g, '/').split('/').filter(Boolean);
+          title = parts[parts.length - 1] || title;
+        }
+        const isUpgrade = (j.message || '').toLowerCase().includes('upgrade');
+        const catLabel  = j.type === 'music_import' ? 'music' : (j.category || j.type);
+        const sub = isUpgrade
+          ? `<span class="text-warning" style="font-size:.7rem">upgrade</span>`
+          : `<span class="text-secondary" style="font-size:.7rem">${esc(catLabel)}</span>`;
+        return `
+          <div class="d-flex justify-content-between align-items-start gap-2 py-2 border-bottom border-secondary" style="border-bottom-width:1px!important">
+            <div style="min-width:0">
+              <div class="small text-truncate">${esc(title)}</div>
+              ${sub}
+            </div>
+            <span class="text-secondary flex-shrink-0" style="font-size:.7rem;white-space:nowrap">${_relTime(j.created_at)}</span>
+          </div>`;
+      }).join('');
+      recentHtml = `
+        <div class="card border-secondary h-100">
+          <div class="card-body p-3">
+            <div class="text-secondary small fw-semibold text-uppercase mb-2" style="letter-spacing:.06em">Recently processed</div>
+            ${rows}
+          </div>
+        </div>`;
+    }
+
+    // ── Assemble ─────────────────────────────────────────────────────────────
+    const leftHtml = seedboxHtml + `<div class="card border-secondary"><div class="card-body p-3">${catsHtml}</div></div>`;
+
+    this._setApp(`
+      ${heroHtml}
+      <div class="row g-3">
+        <div class="col-12 col-lg-7">${leftHtml}</div>
+        ${recentHtml ? `<div class="col-12 col-lg-5">${recentHtml}</div>` : ''}
+      </div>`);
+
+    document.getElementById('home-movie-search')?.focus();
   },
 
   async category(name) {
@@ -1375,6 +1427,7 @@ const MovieDiscover = {
   _plexCheckToken: null,   // cancel token for lazy Plex badge loading
   _showAllQualities: false,
   _showIptOverride: false, // show IPT even when movie is already 4K in Plex
+  _preQuery: null,         // query pre-seeded from home search hero
 
   async render(tab) {
     this._tab = tab || this._tab || 'search';
@@ -1393,6 +1446,13 @@ const MovieDiscover = {
       <div id="movie-tab-body"></div>`;
     await this._renderTab();
     this._pollReviewBadge();
+  },
+
+  // Navigate to movie search pre-seeded with a query (called from home hero)
+  searchFor(query) {
+    if (!query) return;
+    this._preQuery = query;
+    Router.go('/movies/search');
   },
 
   async _renderTab() {
@@ -1422,10 +1482,22 @@ const MovieDiscover = {
       <div id="movie-search-results"></div>
       <div id="movie-confirm-panel"></div>`;
 
-    // Re-render confirmed state if we have it
+    // Pre-seeded query from home search hero — fill in and auto-search
+    if (this._preQuery) {
+      const inp = document.getElementById('movie-search-input');
+      if (inp) inp.value = this._preQuery;
+      this._preQuery = null;
+      await this.search();
+      return;
+    }
+
+    // Re-render confirmed state if we have it (back-navigation)
     if (this._confirmed) {
       this._renderConfirmPanel(this._confirmed);
+      return;
     }
+
+    document.getElementById('movie-search-input')?.focus();
   },
 
   async search() {
