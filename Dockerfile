@@ -12,6 +12,7 @@ ARG IMAGE_SOURCE="https://github.com/BluPhant/StavenMediaManager"
 ARG IMAGE_VERSION="dev"
 ARG IMAGE_REVISION=""
 ARG IMAGE_LICENSES="MIT"
+ARG BUILD_DATE=""
 
 LABEL org.opencontainers.image.title="${IMAGE_TITLE}"
 LABEL org.opencontainers.image.description="${IMAGE_DESCRIPTION}"
@@ -29,6 +30,10 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Python deps ───────────────────────────────────────────────────────────────
+ENV APP_VERSION=${IMAGE_VERSION}
+ENV APP_REVISION=${IMAGE_REVISION}
+ENV APP_BUILD_DATE=${BUILD_DATE}
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

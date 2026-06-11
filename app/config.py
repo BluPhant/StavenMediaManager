@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     # BTN_API_KEY   API key from your BTN profile → Manage API Keys
     btn_api_key: str = ""
 
+    # ── Build info (injected by Docker ARG→ENV at image build time) ───────────
+    app_version:    str = "dev"
+    app_revision:   str = ""
+    app_build_date: str = ""
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{os.path.join(self.config_dir, 'media_manager.db')}"

@@ -2026,6 +2026,102 @@ function _relTime(iso) {
   return `${Math.floor(diff/86400)}d ago`;
 }
 
+// ─────────────────────────────────────────────
+// About page
+// ─────────────────────────────────────────────
+const AboutPage = {
+  async render() {
+    const app = document.getElementById('app');
+    app.innerHTML = `
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="mb-0"><i class="bi bi-info-circle me-2 text-secondary"></i>About</h5>
+        <button class="btn btn-sm btn-outline-secondary" onclick="AboutPage.render()">
+          <i class="bi bi-arrow-clockwise me-1"></i>Re-check
+        </button>
+      </div>
+      <div id="about-body">
+        <div class="text-secondary small"><span class="spinner-border spinner-border-sm me-2"></span>Checking connections…</div>
+      </div>`;
+    try {
+      const data = await API.get('/about');
+      document.getElementById('about-body').innerHTML = AboutPage._html(data);
+    } catch (e) {
+      document.getElementById('about-body').innerHTML =
+        `<div class="alert alert-danger">${esc(e.message)}</div>`;
+    }
+  },
+
+  _html(d) {
+    // ── Version card ──────────────────────────────────────────────────────────
+    const verLabel  = d.version && d.version !== 'dev' ? d.version : 'dev';
+    const revLabel  = d.revision ? `<span class="text-secondary ms-2" style="font-size:.8rem">${esc(d.revision)}</span>` : '';
+    const dateLabel = d.build_date
+      ? `<div class="text-secondary small mt-1">Built ${esc(d.build_date.slice(0, 10))}</div>`
+      : '';
+
+    const versionCard = `
+      <div class="card border-secondary mb-4" style="max-width:420px">
+        <div class="card-body py-2 px-3">
+          <div class="d-flex align-items-center gap-2">
+            <img src="/static/img/icon.svg" width="28" height="28" style="border-radius:5px" alt="">
+            <div>
+              <span class="fw-semibold">Staven Media Manager</span>
+              <span class="badge bg-secondary ms-2">${esc(verLabel)}</span>${revLabel}
+              ${dateLabel}
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    // ── Connection check cards ────────────────────────────────────────────────
+    const SERVICE_META = {
+      plex:       { label: 'Plex',        icon: 'bi-display',        color: '#e5a00d' },
+      rtorrent:   { label: 'rTorrent',    icon: 'bi-cloud-download', color: '#6ea8fe' },
+      iptorrents: { label: 'IPTorrents',  icon: 'bi-database',       color: '#20c997' },
+      tmdb:       { label: 'TMDB',        icon: 'bi-film',           color: '#01b4e4' },
+      btn:        { label: 'BTN',         icon: 'bi-broadcast',      color: '#a78bfa' },
+    };
+
+    const cards = Object.entries(SERVICE_META).map(([key, meta]) => {
+      const chk = d.checks?.[key] || {};
+      let dot, statusText, msText = '';
+      if (!chk.configured) {
+        dot        = `<span style="color:#6c757d;font-size:1.1rem">&#9679;</span>`;
+        statusText = `<span class="text-secondary">Not configured</span>`;
+      } else if (chk.ok) {
+        dot        = `<span style="color:#198754;font-size:1.1rem">&#9679;</span>`;
+        statusText = `<span class="text-success-emphasis">${esc(chk.detail || 'OK')}</span>`;
+        if (chk.ms != null) msText = `<span class="text-secondary ms-2" style="font-size:.72rem">${chk.ms}ms</span>`;
+      } else {
+        dot        = `<span style="color:#dc3545;font-size:1.1rem">&#9679;</span>`;
+        statusText = `<span class="text-danger">${esc(chk.detail || 'Error')}</span>`;
+      }
+
+      return `
+        <div class="card border-secondary">
+          <div class="card-body py-2 px-3">
+            <div class="d-flex align-items-start gap-2">
+              <i class="bi ${meta.icon} mt-1" style="color:${meta.color};font-size:1.1rem;flex-shrink:0"></i>
+              <div class="min-w-0">
+                <div class="fw-semibold small">${meta.label}</div>
+                <div class="small d-flex align-items-center gap-1 flex-wrap">
+                  ${dot} ${statusText}${msText}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+
+    return `
+      ${versionCard}
+      <h6 class="text-secondary text-uppercase mb-2" style="font-size:.75rem;letter-spacing:.06em">Connections</h6>
+      <div class="d-grid gap-2" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));display:grid">
+        ${cards}
+      </div>`;
+  },
+};
+
 const Router = {
   async route() {
     const hash = (location.hash || '#/').slice(1);
@@ -2034,8 +2130,11 @@ const Router = {
     // highlight active nav links
     document.getElementById('nav-search-link')?.classList.toggle('text-info', parts[0] === 'search');
     document.getElementById('nav-movies-link')?.classList.toggle('text-info', parts[0] === 'movies');
+    document.getElementById('nav-about-link')?.classList.toggle('text-info', parts[0] === 'about');
 
-    if (!parts.length || (parts[0] !== 'category' && parts[0] !== 'search' && parts[0] !== 'movies')) {
+    if (parts[0] === 'about') {
+      await AboutPage.render();
+    } else if (!parts.length || (parts[0] !== 'category' && parts[0] !== 'search' && parts[0] !== 'movies')) {
       await Views.home();
     } else if (parts[0] === 'movies') {
       await MovieDiscover.render(parts[1] || 'search');

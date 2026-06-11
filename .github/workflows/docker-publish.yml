@@ -66,6 +66,7 @@ jobs:
             IMAGE_VERSION=${{ steps.meta.outputs.version }}
             IMAGE_REVISION=${{ github.sha }}
             IMAGE_LICENSES=MIT
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
           # Layer cache via GitHub Actions cache
           cache-from: type=gha
           cache-to: type=gha,mode=max
