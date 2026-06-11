@@ -731,6 +731,11 @@ const JobsPanel = {
     document.getElementById('jobs-chevron').className = 'bi bi-chevron-down';
   },
 
+  close() {
+    document.getElementById('jobs-panel-body').style.display = 'none';
+    document.getElementById('jobs-chevron').className = 'bi bi-chevron-up';
+  },
+
   toggle() {
     const body = document.getElementById('jobs-panel-body');
     const chevron = document.getElementById('jobs-chevron');
@@ -2205,6 +2210,8 @@ const Router = {
   async route() {
     const hash = (location.hash || '#/').slice(1);
     const parts = hash.split('/').filter(Boolean);
+
+    JobsPanel.close();
 
     // highlight active nav links
     document.getElementById('nav-search-link')?.classList.toggle('text-info', parts[0] === 'search');
