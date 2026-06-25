@@ -12,8 +12,20 @@ logger = logging.getLogger(__name__)
 _executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="job")
 _cancel_flags: dict[int, threading.Event] = {}  # job_id → cancel event
 
-# ── Queue scheduler ────────────────────────────────────────────────────────────
-QUEUE_CHECK_INTERVAL = 4 * 3600   # 4 hours in seconds
+# ── Scheduler config ──────────────────────────────────────────────────────────
+QUEUE_CHECK_INTERVAL = 4 * 3600   # 4 hours — IPT availability check
+SYNC_FAST_INTERVAL   = 300        # 5 minutes — after a grab
+SYNC_FAST_WINDOW     = 7200       # 2 hours — fast polling duration
+SYNC_SLOW_INTERVAL   = 3600      # 1 hour — normal polling
+
+_last_grab_at: float = 0.0  # monotonic timestamp of most recent grab
+
+
+def notify_grab() -> None:
+    """Called after a torrent is sent to the seedbox. Switches sync to fast polling."""
+    global _last_grab_at
+    _last_grab_at = time.monotonic()
+    logger.info("Grab notified — sync scheduler entering fast-poll mode.")
 
 
 def request_cancel(job_id: int) -> None:
@@ -105,11 +117,14 @@ def submit_single_movie_check(job_id: int, imdb_id: str) -> None:
 
 def start_queue_scheduler() -> None:
     """
-    Start a daemon thread that fires a queue_check job every 4 hours.
-    Only creates a job if at least one movie is queued (avoids log noise).
+    Start two daemon threads:
+    1. Queue checker — fires every 4 hours to check IPT for queued movies.
+    2. Sync poller — lightweight seedbox check. Fast (5 min) after a grab for
+       2 hours, then slow (1 hour).  Only triggers a full sync when new
+       completed torrents are detected.
     Called once from app startup.
     """
-    def _scheduler():
+    def _queue_scheduler():
         while True:
             time.sleep(QUEUE_CHECK_INTERVAL)
             try:
@@ -120,7 +135,6 @@ def start_queue_scheduler() -> None:
                     db.close()
 
                 if count == 0:
-                    logger.debug("Queue scheduler: no queued movies, skipping.")
                     continue
 
                 db2 = SessionLocal()
@@ -143,9 +157,74 @@ def start_queue_scheduler() -> None:
             except Exception as exc:
                 logger.warning(f"Queue scheduler error: {exc}")
 
-    t = threading.Thread(target=_scheduler, daemon=True, name="queue-scheduler")
-    t.start()
+    def _sync_poller():
+        from ..config import settings
+        from ..models import SyncedItem
+        from .sources.rtorrent import RtorrentSource
+
+        while True:
+            # Adaptive interval
+            since_grab = time.monotonic() - _last_grab_at
+            interval = SYNC_FAST_INTERVAL if since_grab < SYNC_FAST_WINDOW else SYNC_SLOW_INTERVAL
+            time.sleep(interval)
+
+            try:
+                rt = RtorrentSource()
+                if not rt.is_configured() or not settings.rtorrent_tag:
+                    continue
+
+                # Lightweight check: completed torrents with our label not yet synced
+                db = SessionLocal()
+                try:
+                    synced = {r.item_id for r in db.query(SyncedItem.item_id).filter(
+                        SyncedItem.source == "rtorrent"
+                    ).all()}
+                finally:
+                    db.close()
+
+                new = rt.check_new_completions(settings.rtorrent_tag, synced)
+                if not new:
+                    continue
+
+                names = [n for _, n in new]
+                logger.info(f"Sync poller: {len(new)} new completion(s) detected: {names}")
+
+                # Check no sync is already running
+                db2 = SessionLocal()
+                try:
+                    running = db2.query(Job).filter(
+                        Job.type == "sync",
+                        Job.status.in_(["pending", "running"]),
+                    ).first()
+                    if running:
+                        logger.info("Sync poller: sync already running, skipping.")
+                        continue
+
+                    job = Job(
+                        type="sync",
+                        category="",
+                        item_name="Auto-sync (new completions)",
+                        source_path="",
+                        status="pending",
+                        progress=0,
+                    )
+                    db2.add(job)
+                    db2.commit()
+                    db2.refresh(job)
+                    submit_sync(job.id)
+                    logger.info(f"Sync poller: auto-sync submitted (job {job.id})")
+                finally:
+                    db2.close()
+
+            except Exception as exc:
+                logger.warning(f"Sync poller error: {exc}")
+
+    t1 = threading.Thread(target=_queue_scheduler, daemon=True, name="queue-scheduler")
+    t2 = threading.Thread(target=_sync_poller, daemon=True, name="sync-poller")
+    t1.start()
+    t2.start()
     logger.info(f"Queue scheduler started (interval={QUEUE_CHECK_INTERVAL}s).")
+    logger.info(f"Sync poller started (fast={SYNC_FAST_INTERVAL}s, slow={SYNC_SLOW_INTERVAL}s).")
 
 
 def _guarded(job_id: int, func, *args) -> None:

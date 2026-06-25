@@ -108,6 +108,25 @@ def extract_info_hash(torrent_bytes: bytes) -> str:
     return hashlib.sha1(torrent_bytes[info_start:info_end]).hexdigest().upper()
 
 
+def extract_torrent_name(torrent_bytes: bytes) -> str:
+    """Extract the directory/file name from a .torrent file (info.name field)."""
+    info_marker = b"4:info"
+    idx = torrent_bytes.find(info_marker)
+    if idx == -1:
+        raise ValueError("No 'info' key found in torrent data")
+    info_start = idx + len(info_marker)
+    info_end = _bencode_end(torrent_bytes, info_start)
+    info_bytes = torrent_bytes[info_start:info_end]
+    name_marker = b"4:name"
+    name_idx = info_bytes.find(name_marker)
+    if name_idx == -1:
+        raise ValueError("No 'name' key in info dict")
+    val_start = name_idx + len(name_marker)
+    colon = info_bytes.index(b":", val_start)
+    length = int(info_bytes[val_start:colon])
+    return info_bytes[colon + 1: colon + 1 + length].decode("utf-8", errors="replace")
+
+
 def _bencode_end(data: bytes, pos: int) -> int:
     """Return the index one past the end of the bencoded value starting at pos."""
     c = data[pos:pos + 1]
@@ -399,6 +418,22 @@ class RtorrentSource(BaseSource):
             hash_, name, label, done, total = row
             pct = round(done / max(total, 1) * 100, 1)
             result[hash_.upper()] = {"name": name, "label": label, "pct": pct, "size_bytes": int(total)}
+        return result
+
+    def check_new_completions(self, label: str, exclude_ids: set[str]) -> list[tuple[str, str]]:
+        """
+        Lightweight check: return [(hash, name)] of completed torrents with the
+        given label that are NOT in exclude_ids.  Single XML-RPC call, no file
+        listing or type detection — much cheaper than list_ready().
+        """
+        proxy = self._proxy()
+        rows = proxy.d.multicall2("", "main",
+            "d.hash=", "d.name=", "d.complete=", "d.custom1=")
+        result = []
+        for hash_, name, complete, lbl in rows:
+            h = hash_.upper()
+            if lbl.lower() == label.lower() and complete == 1 and h not in exclude_ids:
+                result.append((h, name))
         return result
 
     def stop_torrent(self, hash_: str) -> None:

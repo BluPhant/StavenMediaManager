@@ -178,10 +178,18 @@ def run_queue_check(job_id: int) -> None:
             # Update movie record
             _mark_grabbed(movie.imdb_id, info_hash)
 
-            # Also ensure a MovieMatch exists so auto-move works on sync
-            if settings.tmdb_api_key:
-                from .movies import auto_match_movie
-                auto_match_movie(best.title, settings.tmdb_api_key, None)
+            # Create MovieMatch from the known MovieSearch data (not auto_match_movie
+            # which parses the torrent title and often fails on dirty names)
+            try:
+                from .sources.rtorrent import extract_torrent_name
+                torrent_name = extract_torrent_name(torrent_bytes)
+            except Exception:
+                torrent_name = best.title
+            _ensure_movie_match(torrent_name, movie)
+
+            # Notify sync scheduler to start fast-polling
+            from .job_manager import notify_grab
+            notify_grab()
 
             grabbed += 1
             update_job(job_id, progress=pct_base + 5,
@@ -259,5 +267,54 @@ def _mark_grabbed(imdb_id: str, info_hash: str) -> None:
             m.queue_check_count = (m.queue_check_count or 0) + 1
             m.queue_checked_at  = datetime.utcnow()
             db.commit()
+    finally:
+        db.close()
+
+
+def _ensure_movie_match(torrent_name: str, movie: "MovieSearch") -> None:
+    """Create MovieMatch directly from the MovieSearch record we already have."""
+    from ..models import MovieMatch
+    from .movies import get_tmdb_details
+
+    db = SessionLocal()
+    try:
+        existing = db.query(MovieMatch).filter(
+            MovieMatch.category == "movies",
+            MovieMatch.item_name == torrent_name,
+        ).first()
+        if existing:
+            return
+
+        formatted = f"{movie.title} ({movie.year})" if movie.year else movie.title
+        imdb_id = movie.imdb_id
+        tmdb_id = movie.tmdb_id
+        poster = movie.poster_url
+        overview = movie.overview
+
+        if tmdb_id and settings.tmdb_api_key:
+            try:
+                details = get_tmdb_details(tmdb_id, settings.tmdb_api_key)
+                if details:
+                    formatted = details.get("formatted_name", formatted)
+                    poster = details.get("poster_url") or poster
+                    overview = details.get("overview") or overview
+            except Exception:
+                pass
+
+        m = MovieMatch(
+            category="movies",
+            item_name=torrent_name,
+            tmdb_id=tmdb_id or 0,
+            imdb_id=imdb_id,
+            formatted_name=formatted,
+            year=movie.year,
+            poster_url=poster,
+            overview=overview,
+        )
+        db.add(m)
+        db.commit()
+        logger.info(f"MovieMatch created (queue grab): '{torrent_name}' -> '{formatted}'")
+    except Exception as exc:
+        logger.warning(f"MovieMatch creation failed for '{torrent_name}': {exc}")
     finally:
         db.close()

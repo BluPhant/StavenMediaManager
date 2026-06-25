@@ -19,7 +19,7 @@ from ..config import settings
 from ..database import get_db
 from ..services.iptorrents import IPTorrentsClient, build_search_cascade, parse_query
 from ..services.movies import auto_match_movie, search_tmdb
-from ..services.sources.rtorrent import RtorrentSource, extract_info_hash
+from ..services.sources.rtorrent import RtorrentSource, extract_info_hash, extract_torrent_name
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/iptorrents", tags=["iptorrents"])
@@ -347,17 +347,71 @@ def iptorrents_grab(req: GrabRequest, db: Session = Depends(get_db)):
                 db.close()
         threading.Thread(target=_link_movie, daemon=True).start()
 
-    # Auto-match movies to TMDB in the background so the match is ready by the
-    # time the sync job downloads the file (enabling auto-move on sync).
-    if req.suggested_type == "movies" and req.title and settings.tmdb_api_key:
-        torrent_title = req.title.strip()
-        api_key = settings.tmdb_api_key
+    # Create MovieMatch so the auto-move works when the sync downloads the file.
+    # Use the torrent's actual directory name (from .torrent metadata) — not the RSS
+    # title, which may differ.  If imdb_id is known (from discover flow), create
+    # directly from MovieSearch; otherwise fall back to auto_match_movie.
+    if req.suggested_type == "movies" and settings.tmdb_api_key:
         def _do_match():
-            match = auto_match_movie(torrent_title, api_key, None)
-            if match:
-                logger.info(f"Auto-matched '{torrent_title}' → '{match.formatted_name}'")
-            else:
-                logger.info(f"Auto-match: no confident result for '{torrent_title}'")
+            try:
+                torrent_name = extract_torrent_name(torrent_bytes)
+            except Exception:
+                torrent_name = req.title.strip()
+
+            if req.imdb_id:
+                _ensure_movie_match_from_imdb(torrent_name, req.imdb_id)
+            elif req.title:
+                match = auto_match_movie(torrent_name, settings.tmdb_api_key, None)
+                if match:
+                    logger.info(f"Auto-matched '{torrent_name}' → '{match.formatted_name}'")
+                else:
+                    logger.info(f"Auto-match: no confident result for '{torrent_name}'")
         threading.Thread(target=_do_match, daemon=True).start()
 
+    # Notify the sync scheduler that a grab happened (triggers fast polling)
+    from ..services.job_manager import notify_grab
+    notify_grab()
+
     return {"status": "ok", "label": label, "size": len(torrent_bytes), "hash": info_hash}
+
+
+def _ensure_movie_match_from_imdb(torrent_name: str, imdb_id: str) -> None:
+    """Create a MovieMatch directly from the MovieSearch record (reliable — no title parsing)."""
+    from ..database import SessionLocal
+    from ..models import MovieMatch, MovieSearch
+    from ..services.movies import get_tmdb_details
+
+    db = SessionLocal()
+    try:
+        existing = db.query(MovieMatch).filter(
+            MovieMatch.category == "movies",
+            MovieMatch.item_name == torrent_name,
+        ).first()
+        if existing:
+            logger.info(f"MovieMatch already exists for '{torrent_name}'")
+            return
+
+        ms = db.query(MovieSearch).filter(MovieSearch.imdb_id == imdb_id).first()
+        if ms and ms.tmdb_id:
+            details = get_tmdb_details(ms.tmdb_id, settings.tmdb_api_key)
+            if details:
+                m = MovieMatch(
+                    category="movies",
+                    item_name=torrent_name,
+                    tmdb_id=ms.tmdb_id,
+                    imdb_id=imdb_id,
+                    formatted_name=details.get("formatted_name", ms.title),
+                    year=details.get("year") or ms.year,
+                    poster_url=details.get("poster_url") or ms.poster_url,
+                    overview=details.get("overview") or ms.overview,
+                )
+                db.add(m)
+                db.commit()
+                logger.info(f"MovieMatch created: '{torrent_name}' → '{m.formatted_name}' (imdb={imdb_id})")
+                return
+
+        logger.warning(f"Could not create MovieMatch from imdb_id={imdb_id} for '{torrent_name}'")
+    except Exception as exc:
+        logger.warning(f"MovieMatch creation failed for '{torrent_name}': {exc}")
+    finally:
+        db.close()
