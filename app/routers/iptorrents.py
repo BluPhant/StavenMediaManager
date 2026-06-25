@@ -203,7 +203,7 @@ def iptorrents_browse(limit: int = 20, offset: int = 0):
         return (idx, {**g, "tmdb": None})
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = [pool.submit(_enrich, i, g) for i, g in enumerate(unique[:30])]
+        futures = [pool.submit(_enrich, i, g) for i, g in enumerate(unique)]
         for f in as_completed(futures):
             enriched.append(f.result())
 
