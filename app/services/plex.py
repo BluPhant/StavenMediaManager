@@ -74,16 +74,17 @@ def refresh_library_path(path: str | None = None) -> None:
     sid = _get_section_id()
     base  = settings.plex_url.rstrip("/")
     token = settings.plex_token
-    # Always do a full section refresh — targeted path refresh requires Plex's
-    # mount prefix (e.g. /data/movies/) which differs from SMM's (/media/movies/).
-    if sid:
+    plex_path = _local_to_plex_path(path) if path else None
+    if plex_path and sid:
+        url = f"{base}/library/sections/{sid}/refresh?path={urllib.parse.quote(plex_path)}&X-Plex-Token={token}"
+    elif sid:
         url = f"{base}/library/sections/{sid}/refresh?X-Plex-Token={token}"
     else:
         url = f"{base}/library/sections/all/refresh?X-Plex-Token={token}"
     try:
         urllib.request.urlopen(urllib.request.Request(url), timeout=10)  # noqa: S310
         _library_cache_at = 0.0   # force re-fetch on next check
-        logger.info(f"Plex refresh triggered (section={sid})")
+        logger.info(f"Plex refresh triggered (path={plex_path!r})")
     except Exception as exc:
         logger.warning(f"Plex refresh failed (non-fatal): {exc}")
 
@@ -169,6 +170,42 @@ def _get_library() -> dict[str, dict]:
     except Exception as exc:
         logger.warning(f"Plex library fetch failed: {exc}")
         return _library_cache or {}
+
+
+_plex_base: str | None = None  # e.g. "/data" — discovered from library cache
+
+
+def _local_to_plex_path(local_path: str) -> str | None:
+    """
+    Translate a local path like /media/movies/Title (Year) to Plex's mount
+    like /data/movies/Title (Year).  Discovers the Plex prefix from cached
+    library entries.
+    """
+    global _plex_base
+    if _plex_base is None:
+        lib = _get_library()
+        for entry in lib.values():
+            pp = entry.get("plex_path") or ""
+            if not pp:
+                continue
+            norm = pp.replace("\\", "/")
+            from ..services.mover import DEST_MAP
+            for subdir in set(DEST_MAP.values()):
+                parts = [p for p in norm.split("/") if p]
+                if subdir in parts:
+                    idx = parts.index(subdir)
+                    _plex_base = "/" + "/".join(parts[:idx])
+                    break
+            if _plex_base:
+                break
+        if not _plex_base:
+            return None
+
+    media_dir = settings.media_dir.rstrip("/")
+    local_norm = local_path.replace("\\", "/").rstrip("/")
+    if local_norm.startswith(media_dir):
+        return _plex_base + local_norm[len(media_dir):]
+    return None
 
 
 def _extract_imdb_id(item: dict) -> str | None:
