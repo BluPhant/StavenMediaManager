@@ -2507,36 +2507,63 @@ const AboutPage = {
 // Browse — recently uploaded movies on IPT
 // ─────────────────────────────────────────────
 const BrowsePage = {
+  _pageSize: 24,
+  _offset: 0,
+  _total: 0,
+
   async render() {
+    this._offset = 0;
+    this._total = 0;
     const app = document.getElementById('app');
     app.innerHTML = `
       <div class="d-flex align-items-baseline gap-2 mb-3">
         <h5 class="mb-0"><i class="bi bi-fire text-danger me-2"></i>New on IPT</h5>
-        <span class="text-secondary small">Recently uploaded movies</span>
+        <span class="text-secondary small" id="browse-count"></span>
       </div>
       <div id="browse-grid" class="row g-3">
         <div class="col-12 text-center py-4">
           <div class="spinner-border text-secondary"></div>
           <div class="text-secondary small mt-2">Loading recent uploads…</div>
         </div>
-      </div>`;
+      </div>
+      <div id="browse-more" class="text-center mt-3"></div>`;
+    await this._loadPage();
+  },
 
-    let movies;
+  async _loadPage() {
+    const grid = document.getElementById('browse-grid');
+    const moreEl = document.getElementById('browse-more');
+    if (this._offset === 0) {
+      grid.innerHTML = `
+        <div class="col-12 text-center py-4">
+          <div class="spinner-border text-secondary"></div>
+        </div>`;
+    } else if (moreEl) {
+      moreEl.innerHTML = `<div class="spinner-border spinner-border-sm text-secondary"></div>`;
+    }
+
+    let data;
     try {
-      movies = await API.get('/iptorrents/browse?limit=24');
+      data = await API.get(`/iptorrents/browse?limit=${this._pageSize}&offset=${this._offset}`);
     } catch (e) {
-      document.getElementById('browse-grid').innerHTML =
+      grid.innerHTML =
         `<div class="col-12"><div class="alert alert-danger">${esc(e.message)}</div></div>`;
       return;
     }
 
-    if (!movies.length) {
-      document.getElementById('browse-grid').innerHTML =
+    const movies = data.items || [];
+    this._total = data.total || 0;
+
+    const countEl = document.getElementById('browse-count');
+    if (countEl) countEl.textContent = `${this._total} movies`;
+
+    if (!movies.length && this._offset === 0) {
+      grid.innerHTML =
         '<div class="col-12 text-secondary text-center py-4">No recent movies found.</div>';
       return;
     }
 
-    document.getElementById('browse-grid').innerHTML = movies.map(m => {
+    const cards = movies.map(m => {
       const resLabel = m.best_res
         ? `<span class="badge ${m.best_res === '2160p' || m.best_res === '4k' ? 'bg-success' : 'bg-secondary'} me-1">${esc(m.best_res)}</span>`
         : '';
@@ -2565,6 +2592,30 @@ const BrowsePage = {
           </div>
         </div>`;
     }).join('');
+
+    if (this._offset === 0) {
+      grid.innerHTML = cards;
+    } else {
+      grid.insertAdjacentHTML('beforeend', cards);
+    }
+
+    this._offset += movies.length;
+
+    if (moreEl) {
+      if (this._offset < this._total) {
+        moreEl.innerHTML = `
+          <button class="btn btn-outline-secondary btn-sm" onclick="BrowsePage.loadMore()">
+            <i class="bi bi-arrow-down-circle me-1"></i>Load more
+            <span class="text-secondary ms-1">(${this._offset}/${this._total})</span>
+          </button>`;
+      } else {
+        moreEl.innerHTML = '';
+      }
+    }
+  },
+
+  async loadMore() {
+    await this._loadPage();
   },
 };
 

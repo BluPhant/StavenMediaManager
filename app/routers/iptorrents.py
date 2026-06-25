@@ -138,7 +138,7 @@ _BROWSE_TTL = 300.0  # 5 minutes
 
 
 @router.get("/browse")
-def iptorrents_browse(limit: int = 20):
+def iptorrents_browse(limit: int = 20, offset: int = 0):
     """
     Recently uploaded movies from IPT, grouped by title and enriched with
     TMDB metadata (poster, rating, genres).  Cached for 5 minutes.
@@ -147,7 +147,8 @@ def iptorrents_browse(limit: int = 20):
 
     now = time.monotonic()
     if _browse_cache is not None and (now - _browse_cache_at) < _BROWSE_TTL:
-        return _browse_cache[:limit]
+        page = _browse_cache[offset:offset + limit]
+        return {"items": page, "total": len(_browse_cache), "offset": offset}
 
     if not _ipt.is_configured():
         raise HTTPException(status_code=400, detail="IPTorrents not configured.")
@@ -228,7 +229,8 @@ def iptorrents_browse(limit: int = 20):
     _browse_cache = result
     _browse_cache_at = now
     logger.info(f"IPT browse: {len(result)} unique movies from {len(raw)} releases")
-    return result[:limit]
+    page = result[offset:offset + limit]
+    return {"items": page, "total": len(result), "offset": offset}
 
 
 import re as _re
