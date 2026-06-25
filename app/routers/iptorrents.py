@@ -1,12 +1,15 @@
 """
-IPTorrents API — search and grab torrents.
+IPTorrents API — search, browse, and grab torrents.
 
 GET  /api/iptorrents/status          — is IPT configured?
 GET  /api/iptorrents/search?q=&cat=  — search via RSS feed
+GET  /api/iptorrents/browse          — recently uploaded movies (TMDB-enriched)
 POST /api/iptorrents/grab            — fetch .torrent and load into rTorrent
 """
 import logging
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -14,8 +17,8 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..services.iptorrents import IPTorrentsClient, build_search_cascade
-from ..services.movies import auto_match_movie
+from ..services.iptorrents import IPTorrentsClient, build_search_cascade, parse_query
+from ..services.movies import auto_match_movie, search_tmdb
 from ..services.sources.rtorrent import RtorrentSource, extract_info_hash
 
 logger = logging.getLogger(__name__)
@@ -125,6 +128,118 @@ def iptorrents_smart_search(q: str = "", cat: str = "all", limit: int = 50):
         "year":       data["year"],
         "attempts":   data["attempts"],
     }
+
+
+# ── Browse (recently uploaded movies, TMDB-enriched) ─────────────────────────
+
+_browse_cache: list | None = None
+_browse_cache_at: float = 0.0
+_BROWSE_TTL = 300.0  # 5 minutes
+
+
+@router.get("/browse")
+def iptorrents_browse(limit: int = 20):
+    """
+    Recently uploaded movies from IPT, grouped by title and enriched with
+    TMDB metadata (poster, rating, genres).  Cached for 5 minutes.
+    """
+    global _browse_cache, _browse_cache_at
+
+    now = time.monotonic()
+    if _browse_cache is not None and (now - _browse_cache_at) < _BROWSE_TTL:
+        return _browse_cache[:limit]
+
+    if not _ipt.is_configured():
+        raise HTTPException(status_code=400, detail="IPTorrents not configured.")
+    if not settings.tmdb_api_key:
+        raise HTTPException(status_code=503, detail="TMDB API key not configured.")
+
+    try:
+        raw = _ipt.search(query="", category="movies", limit=100)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # Group releases by movie (title + year extracted from torrent name)
+    groups: dict[str, dict] = {}
+    for r in raw:
+        parsed = parse_query(r.title)
+        title_clean = parsed["title"]
+        year_str = parsed["year"]
+        year = int(year_str) if year_str else None
+        if not title_clean:
+            continue
+        key = f"{title_clean.lower()}|{year or ''}"
+        if key not in groups:
+            groups[key] = {
+                "title": title_clean, "year": year,
+                "releases": [], "best_res": None, "best_rank": -1,
+                "total_seeds": 0,
+            }
+        g = groups[key]
+        g["releases"].append(r)
+        g["total_seeds"] += r.seeders
+        # Track best resolution
+        res = _browse_extract_res(r.title)
+        rank = _BROWSE_RES_RANK.get(res, 0) if res else 0
+        if rank > g["best_rank"]:
+            g["best_rank"] = rank
+            g["best_res"] = res
+
+    # Sort by recency (first appearance in RSS = most recent)
+    unique = list(groups.values())
+
+    # Enrich with TMDB (parallel, max 8 threads)
+    api_key = settings.tmdb_api_key
+    enriched = []
+
+    def _enrich(idx, g):
+        try:
+            results = search_tmdb(g["title"], g["year"], api_key)
+            if results:
+                return (idx, {**g, "tmdb": results[0]})
+        except Exception:
+            pass
+        return (idx, {**g, "tmdb": None})
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(_enrich, i, g) for i, g in enumerate(unique[:30])]
+        for f in as_completed(futures):
+            enriched.append(f.result())
+
+    enriched.sort(key=lambda pair: pair[0])
+    enriched = [e for _, e in enriched]
+
+    # Build response
+    result = []
+    for e in enriched:
+        tmdb = e.get("tmdb") or {}
+        result.append({
+            "title":       tmdb.get("title") or e["title"],
+            "year":        tmdb.get("year") or e["year"],
+            "tmdb_id":     tmdb.get("tmdb_id"),
+            "poster_url":  tmdb.get("poster_url"),
+            "overview":    (tmdb.get("overview") or "")[:200],
+            "formatted_name": tmdb.get("formatted_name") or e["title"],
+            "best_res":    e["best_res"],
+            "total_seeds": e["total_seeds"],
+            "release_count": len(e["releases"]),
+        })
+
+    _browse_cache = result
+    _browse_cache_at = now
+    logger.info(f"IPT browse: {len(result)} unique movies from {len(raw)} releases")
+    return result[:limit]
+
+
+import re as _re
+
+_BROWSE_RES_RE = _re.compile(r"\b(2160p|1080p|720p|480p|4[Kk]|UHD)\b", _re.IGNORECASE)
+_BROWSE_RES_RANK = {"2160p": 4, "4k": 4, "uhd": 4, "1080p": 2, "720p": 1, "480p": 0}
+
+
+def _browse_extract_res(title: str) -> str | None:
+    m = _BROWSE_RES_RE.search(title)
+    return m.group(1).lower() if m else None
 
 
 # ── Grab ──────────────────────────────────────────────────────────────────────

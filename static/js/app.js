@@ -1749,6 +1749,13 @@ const MovieDiscover = {
     Router.go('/movies/search');
   },
 
+  // Navigate to movie discover and auto-confirm by TMDB ID (called from browse page)
+  goById(tmdbId) {
+    if (!tmdbId) return;
+    this._preConfirmId = tmdbId;
+    Router.go('/movies/search');
+  },
+
   async _renderTab() {
     const body = document.getElementById('movie-tab-body');
     if (!body) return;
@@ -1775,6 +1782,14 @@ const MovieDiscover = {
       </div>
       <div id="movie-search-results"></div>
       <div id="movie-confirm-panel"></div>`;
+
+    // Pre-seeded TMDB ID from browse page — auto-confirm
+    if (this._preConfirmId) {
+      const tmdbId = this._preConfirmId;
+      this._preConfirmId = null;
+      await this.confirm(tmdbId);
+      return;
+    }
 
     // Pre-seeded query from home search hero — fill in and auto-search
     if (this._preQuery) {
@@ -2488,6 +2503,71 @@ const AboutPage = {
   },
 };
 
+// ─────────────────────────────────────────────
+// Browse — recently uploaded movies on IPT
+// ─────────────────────────────────────────────
+const BrowsePage = {
+  async render() {
+    const app = document.getElementById('app');
+    app.innerHTML = `
+      <div class="d-flex align-items-baseline gap-2 mb-3">
+        <h5 class="mb-0"><i class="bi bi-fire text-danger me-2"></i>New on IPT</h5>
+        <span class="text-secondary small">Recently uploaded movies</span>
+      </div>
+      <div id="browse-grid" class="row g-3">
+        <div class="col-12 text-center py-4">
+          <div class="spinner-border text-secondary"></div>
+          <div class="text-secondary small mt-2">Loading recent uploads…</div>
+        </div>
+      </div>`;
+
+    let movies;
+    try {
+      movies = await API.get('/iptorrents/browse?limit=24');
+    } catch (e) {
+      document.getElementById('browse-grid').innerHTML =
+        `<div class="col-12"><div class="alert alert-danger">${esc(e.message)}</div></div>`;
+      return;
+    }
+
+    if (!movies.length) {
+      document.getElementById('browse-grid').innerHTML =
+        '<div class="col-12 text-secondary text-center py-4">No recent movies found.</div>';
+      return;
+    }
+
+    document.getElementById('browse-grid').innerHTML = movies.map(m => {
+      const resLabel = m.best_res
+        ? `<span class="badge ${m.best_res === '2160p' || m.best_res === '4k' ? 'bg-success' : 'bg-secondary'} me-1">${esc(m.best_res)}</span>`
+        : '';
+      return `
+        <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+          <div class="card h-100 match-result-card"
+               onclick="${m.tmdb_id ? `MovieDiscover.goById(${m.tmdb_id})` : ''}"
+               style="${m.tmdb_id ? 'cursor:pointer' : 'cursor:default'}">
+            ${m.poster_url
+              ? `<img src="${esc(m.poster_url)}" class="card-img-top" alt=""
+                      style="aspect-ratio:2/3;object-fit:cover" loading="lazy">`
+              : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark"
+                      style="aspect-ratio:2/3"><i class="bi bi-film text-secondary" style="font-size:2.5rem"></i></div>`
+            }
+            <div class="card-body p-2">
+              <div class="small fw-semibold lh-sm">${esc(m.title)}</div>
+              <div class="text-secondary" style="font-size:.75rem">${m.year ?? ''}</div>
+              <div class="mt-1">
+                ${resLabel}
+                <span class="text-secondary" style="font-size:.7rem">
+                  ${m.release_count} release${m.release_count !== 1 ? 's' : ''}
+                  · ${m.total_seeds} seed${m.total_seeds !== 1 ? 's' : ''}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  },
+};
+
 const Router = {
   async route() {
     const hash = (location.hash || '#/').slice(1);
@@ -2498,10 +2578,13 @@ const Router = {
     // highlight active nav links
     document.getElementById('nav-search-link')?.classList.toggle('text-info', parts[0] === 'search');
     document.getElementById('nav-movies-link')?.classList.toggle('text-info', parts[0] === 'movies');
+    document.getElementById('nav-browse-link')?.classList.toggle('text-info', parts[0] === 'browse');
     document.getElementById('nav-about-link')?.classList.toggle('text-info', parts[0] === 'about');
 
     if (parts[0] === 'about') {
       await AboutPage.render();
+    } else if (parts[0] === 'browse') {
+      await BrowsePage.render();
     } else if (!parts.length || (parts[0] !== 'category' && parts[0] !== 'search' && parts[0] !== 'movies')) {
       await Views.home();
     } else if (parts[0] === 'movies') {
