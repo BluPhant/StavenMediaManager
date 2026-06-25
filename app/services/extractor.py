@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import shutil
 import subprocess
 
 from .job_manager import update_job
@@ -26,56 +27,86 @@ def run_extraction(job_id: int, source_path: str) -> None:
 
         update_job(job_id, progress=base_pct, message=f"Extracting {name}...")
 
-        cmd = [
-            "7z", "x", archive_path,
-            f"-o{source_path}",
-            "-y",       # overwrite without prompt
-            "-bsp1",    # progress → stdout
-            "-bse0",    # suppress error stream
-            "-bso0",    # suppress normal output
-        ]
+        ok, err = _extract_7z(archive_path, source_path, job_id, base_pct, end_pct)
 
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            for line in process.stdout:
-                m = re.match(r"^\s*(\d+)%", line)
-                if m:
-                    file_pct = int(m.group(1))
-                    scaled = base_pct + int(file_pct / 100 * (end_pct - base_pct))
-                    update_job(
-                        job_id,
-                        progress=scaled,
-                        message=f"[{name}] {file_pct}%",
-                    )
-            process.wait()
-        except FileNotFoundError:
-            update_job(
-                job_id,
-                status="error",
-                message="7z not found. Ensure p7zip-full is installed in the container.",
-            )
-            return
-        except Exception as exc:
-            update_job(job_id, status="error", message=str(exc))
-            return
+        if not ok and name.lower().endswith(".rar") and shutil.which("unrar"):
+            update_job(job_id, progress=base_pct, message=f"7z failed, retrying with unrar: {name}...")
+            logger.info(f"7z failed on {name} ({err}), falling back to unrar")
+            ok, err = _extract_unrar(archive_path, source_path, job_id, base_pct, end_pct)
 
-        # 7z exit codes: 0=ok, 1=warning, 2+=fatal
-        if process.returncode > 1:
-            update_job(
-                job_id,
-                status="error",
-                message=f"7z failed with exit code {process.returncode} on {name}",
-            )
+        if not ok:
+            update_job(job_id, status="error", message=err)
             return
 
     removed = _remove_rar_files(source_path)
+    _fix_permissions(source_path)
     update_job(job_id, status="done", progress=100, message=f"Extraction complete. Removed {removed} archive file(s).")
+
+
+def _extract_7z(archive_path, dest, job_id, base_pct, end_pct):
+    name = os.path.basename(archive_path)
+    cmd = [
+        "7z", "x", archive_path,
+        f"-o{dest}",
+        "-y", "-bsp1", "-bse0", "-bso0",
+    ]
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in process.stdout:
+            m = re.match(r"^\s*(\d+)%", line)
+            if m:
+                file_pct = int(m.group(1))
+                scaled = base_pct + int(file_pct / 100 * (end_pct - base_pct))
+                update_job(job_id, progress=scaled, message=f"[{name}] {file_pct}%")
+        process.wait()
+    except FileNotFoundError:
+        return False, "7z not found. Ensure p7zip-full is installed in the container."
+    except Exception as exc:
+        return False, str(exc)
+
+    if process.returncode > 1:
+        return False, f"7z failed with exit code {process.returncode} on {name}"
+    return True, None
+
+
+def _extract_unrar(archive_path, dest, job_id, base_pct, end_pct):
+    name = os.path.basename(archive_path)
+    cmd = ["unrar", "x", "-o+", "-y", archive_path, dest + "/"]
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in process.stdout:
+            m = re.search(r"(\d+)%", line)
+            if m:
+                file_pct = int(m.group(1))
+                scaled = base_pct + int(file_pct / 100 * (end_pct - base_pct))
+                update_job(job_id, progress=scaled, message=f"[unrar] [{name}] {file_pct}%")
+        process.wait()
+    except FileNotFoundError:
+        return False, "unrar not found."
+    except Exception as exc:
+        return False, str(exc)
+
+    if process.returncode != 0:
+        return False, f"unrar failed with exit code {process.returncode} on {name}"
+    return True, None
+
+
+def _fix_permissions(directory: str) -> None:
+    """Set 755 on dirs and 644 on files so other processes (Plex, etc.) can access them."""
+    try:
+        for root, dirs, files in os.walk(directory):
+            for d in dirs:
+                try:
+                    os.chmod(os.path.join(root, d), 0o755)
+                except OSError:
+                    pass
+            for f in files:
+                try:
+                    os.chmod(os.path.join(root, f), 0o644)
+                except OSError:
+                    pass
+    except Exception as exc:
+        logger.warning(f"Permission fix failed (non-fatal): {exc}")
 
 
 def _remove_rar_files(directory: str) -> int:

@@ -458,6 +458,7 @@ def run_music_import(job_id: int, source_path: str) -> None:
         update_job(job_id, status="error", message=f"Move to {dest_dir} failed: {exc}")
         return
 
+    _fix_permissions(dest_dir)
     threading.Thread(target=_refresh_music_library, daemon=True).start()
 
     suffix = ""
@@ -484,3 +485,21 @@ def _refresh_music_library() -> None:
         logger.info("Plex refresh triggered after music import.")
     except Exception as exc:
         logger.warning(f"Plex refresh failed (non-fatal): {exc}")
+
+
+def _fix_permissions(directory: str) -> None:
+    try:
+        os.chmod(directory, 0o755)
+        for root, dirs, files in os.walk(directory):
+            for d in dirs:
+                try:
+                    os.chmod(os.path.join(root, d), 0o755)
+                except OSError:
+                    pass
+            for f in files:
+                try:
+                    os.chmod(os.path.join(root, f), 0o644)
+                except OSError:
+                    pass
+    except Exception as exc:
+        logger.warning(f"Permission fix failed (non-fatal): {exc}")

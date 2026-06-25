@@ -94,6 +94,8 @@ def run_move(job_id: int, source_path: str, formatted_name: str,
         except OSError:
             pass
 
+        _fix_permissions(dest_dir)
+
         # Update UpgradeReview with new file info (now files are in dest_dir)
         if upgrade_review_id:
             _update_review_new_file(upgrade_review_id, dest_dir)
@@ -262,6 +264,25 @@ def _update_review_new_file(review_id: int, dest_dir: str) -> None:
         )
     finally:
         db.close()
+
+
+def _fix_permissions(directory: str) -> None:
+    """Set 755 on dirs and 644 on files so Plex and other processes can access them."""
+    try:
+        os.chmod(directory, 0o755)
+        for root, dirs, files in os.walk(directory):
+            for d in dirs:
+                try:
+                    os.chmod(os.path.join(root, d), 0o755)
+                except OSError:
+                    pass
+            for f in files:
+                try:
+                    os.chmod(os.path.join(root, f), 0o644)
+                except OSError:
+                    pass
+    except Exception as exc:
+        logger.warning(f"Permission fix failed (non-fatal): {exc}")
 
 
 # ── Plex-path translation ─────────────────────────────────────────────────────

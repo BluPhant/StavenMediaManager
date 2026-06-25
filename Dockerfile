@@ -27,7 +27,10 @@ LABEL org.opencontainers.image.licenses="${IMAGE_LICENSES}"
 # inspection), used by app/services/music.py for the music import pipeline.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends p7zip-full openssh-client curl ffmpeg && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    curl -sL https://www.rarlab.com/rar/rarlinux-x64-722.tar.gz | tar xz -C /tmp && \
+    cp /tmp/rar/unrar /usr/local/bin/unrar && chmod 755 /usr/local/bin/unrar && \
+    rm -rf /tmp/rar
 
 # ── Python deps ───────────────────────────────────────────────────────────────
 ENV APP_VERSION=${IMAGE_VERSION}
