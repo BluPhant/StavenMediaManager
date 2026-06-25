@@ -81,7 +81,8 @@ def _auto_move_if_matched(item_name: str, category: str, source_path: str) -> bo
             db.add(job)
             db.commit()
             db.refresh(job)
-            job_manager.submit_move(job.id, source_path, match.formatted_name, category)
+            job_manager.submit_move(job.id, source_path, match.formatted_name, category,
+                                    imdb_id=getattr(match, "imdb_id", "") or "")
             logger.info(
                 f"Auto-move queued: '{item_name}' → '{match.formatted_name}' (job {job.id})"
             )

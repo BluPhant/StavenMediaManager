@@ -337,6 +337,19 @@ def list_matches(category: str = Query(...), db: Session = Depends(get_db)):
 
 @router.post("/match", status_code=201)
 def save_match(req: MatchRequest, db: Session = Depends(get_db)):
+    # Resolve IMDB ID: check movie_searches first, then fall back to TMDB API
+    imdb_id = None
+    ms = db.query(MovieSearch).filter(MovieSearch.tmdb_id == req.tmdb_id).first()
+    if ms:
+        imdb_id = ms.imdb_id
+    if not imdb_id and settings.tmdb_api_key:
+        try:
+            details = get_tmdb_details(req.tmdb_id, settings.tmdb_api_key)
+            if details:
+                imdb_id = details.get("imdb_id") or None
+        except Exception as exc:
+            logger.warning(f"Could not fetch IMDB ID for tmdb={req.tmdb_id}: {exc}")
+
     existing = (
         db.query(MovieMatch)
         .filter(MovieMatch.category == req.category, MovieMatch.item_name == req.item_name)
@@ -344,6 +357,7 @@ def save_match(req: MatchRequest, db: Session = Depends(get_db)):
     )
     if existing:
         existing.tmdb_id        = req.tmdb_id
+        existing.imdb_id        = imdb_id
         existing.formatted_name = req.formatted_name
         existing.year           = req.year
         existing.poster_url     = req.poster_url
@@ -353,6 +367,7 @@ def save_match(req: MatchRequest, db: Session = Depends(get_db)):
             category=req.category,
             item_name=req.item_name,
             tmdb_id=req.tmdb_id,
+            imdb_id=imdb_id,
             formatted_name=req.formatted_name,
             year=req.year,
             poster_url=req.poster_url,

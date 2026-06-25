@@ -170,10 +170,19 @@ def auto_match_movie(item_name: str, api_key: str, db) -> "MovieMatch | None":
         )
         if existing:
             return existing          # already matched, don't overwrite
+        # Resolve IMDB ID from TMDB details
+        imdb_id = None
+        try:
+            details = get_tmdb_details(best["tmdb_id"], api_key)
+            if details:
+                imdb_id = details.get("imdb_id") or None
+        except Exception:
+            pass
         record = MovieMatch(
             category="movies",
             item_name=item_name,
             tmdb_id=best["tmdb_id"],
+            imdb_id=imdb_id,
             formatted_name=best["formatted_name"],
             year=best["year"],
             poster_url=best.get("poster_url"),

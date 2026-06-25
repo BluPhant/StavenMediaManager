@@ -98,6 +98,10 @@ def run_move(job_id: int, source_path: str, formatted_name: str,
         if upgrade_review_id:
             _update_review_new_file(upgrade_review_id, dest_dir)
 
+        # Update MovieSearch record so discover page reflects the move
+        if is_movie and imdb_id:
+            _update_movie_search_after_move(imdb_id, dest_dir)
+
         # Plex targeted refresh runs async — never delays job completion
         threading.Thread(
             target=_try_plex_refresh, args=(category, dest_dir), daemon=True
@@ -261,6 +265,28 @@ def _update_review_new_file(review_id: int, dest_dir: str) -> None:
 
 
 # ── Plex-path translation ─────────────────────────────────────────────────────
+
+def _update_movie_search_after_move(imdb_id: str, dest_dir: str) -> None:
+    """After a successful move, update the MovieSearch record so the discover page
+    reflects that this movie is now in the library."""
+    from ..database import SessionLocal
+    from ..models import MovieSearch
+    db = SessionLocal()
+    try:
+        record = db.query(MovieSearch).filter(MovieSearch.imdb_id == imdb_id).first()
+        if record:
+            record.status = "in_library"
+            # Find the main video file to set plex_path (Plex will report something similar)
+            video = next((f for f in os.listdir(dest_dir) if _is_video(f)), None)
+            if video:
+                record.plex_path = os.path.join(dest_dir, video)
+            db.commit()
+            logger.info(f"MovieSearch {imdb_id} updated: status=in_library")
+    except Exception as exc:
+        logger.warning(f"Failed to update MovieSearch after move for {imdb_id}: {exc}")
+    finally:
+        db.close()
+
 
 def _find_existing_movie_folder(imdb_id: str) -> str | None:
     """

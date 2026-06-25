@@ -31,6 +31,7 @@ class MovieMatch(Base):
     item_name = Column(String(500), nullable=False)   # original directory name
     formatted_name = Column(String(500), nullable=False)  # "Title (Year)"
     tmdb_id = Column(Integer, nullable=False)
+    imdb_id = Column(String(20), nullable=True)        # tt-ID, resolved from TMDB
     year = Column(Integer, nullable=True)
     poster_url = Column(String(500), nullable=True)
     overview = Column(Text, nullable=True)

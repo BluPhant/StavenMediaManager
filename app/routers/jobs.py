@@ -126,7 +126,8 @@ def create_move_job(req: MoveRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(job)
 
-    job_manager.submit_move(job.id, item_path, match.formatted_name, req.category)
+    job_manager.submit_move(job.id, item_path, match.formatted_name, req.category,
+                            imdb_id=getattr(match, "imdb_id", "") or "")
     return job
 
 
