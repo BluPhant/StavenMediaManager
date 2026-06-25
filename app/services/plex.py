@@ -74,16 +74,16 @@ def refresh_library_path(path: str | None = None) -> None:
     sid = _get_section_id()
     base  = settings.plex_url.rstrip("/")
     token = settings.plex_token
-    if path and sid:
-        url = f"{base}/library/sections/{sid}/refresh?path={urllib.parse.quote(path)}&X-Plex-Token={token}"
-    elif sid:
+    # Always do a full section refresh — targeted path refresh requires Plex's
+    # mount prefix (e.g. /data/movies/) which differs from SMM's (/media/movies/).
+    if sid:
         url = f"{base}/library/sections/{sid}/refresh?X-Plex-Token={token}"
     else:
         url = f"{base}/library/sections/all/refresh?X-Plex-Token={token}"
     try:
         urllib.request.urlopen(urllib.request.Request(url), timeout=10)  # noqa: S310
         _library_cache_at = 0.0   # force re-fetch on next check
-        logger.info(f"Plex refresh triggered (path={path!r})")
+        logger.info(f"Plex refresh triggered (section={sid})")
     except Exception as exc:
         logger.warning(f"Plex refresh failed (non-fatal): {exc}")
 
