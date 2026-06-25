@@ -191,6 +191,18 @@ def run_queue_check(job_id: int) -> None:
             logger.error(f"Queue check failed for {movie.imdb_id}: {exc}", exc_info=True)
             errors.append(f"{movie.title}: {exc}")
 
+    if grabbed == 0 and not errors:
+        # No-op run — delete the job record to keep the panel clean
+        db2 = SessionLocal()
+        try:
+            from ..models import Job
+            db2.query(Job).filter(Job.id == job_id).delete()
+            db2.commit()
+        finally:
+            db2.close()
+        logger.info(f"Queue check done (0/{total} grabbed) — job record removed.")
+        return
+
     summary = f"Queue check done. {grabbed}/{total} grabbed."
     if errors:
         summary += f" Errors: {'; '.join(errors)}"
