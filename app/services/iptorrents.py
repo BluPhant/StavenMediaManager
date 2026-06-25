@@ -460,7 +460,7 @@ def _parse_int_from_text(text: str, pattern: str) -> int:
 
 def _title_matches(title: str, words: list[str]) -> bool:
     """Return True if every word in *words* appears in *title* (case-insensitive)."""
-    tl = title.lower()
+    tl = title.lower().replace("'", "").replace("'", "")
     return all(w in tl for w in words)
 
 
