@@ -70,6 +70,15 @@ def _auto_move_if_matched(item_name: str, category: str, source_path: str) -> bo
             )
             if not match:
                 return False
+            # Skip if a move job already ran for this source (prevents duplicates)
+            recent = db.query(Job).filter(
+                Job.source_path == source_path,
+                Job.type == "move",
+                Job.status.in_(["pending", "running", "done"]),
+            ).first()
+            if recent:
+                logger.info(f"Skipping auto-move for '{item_name}' — job #{recent.id} already exists ({recent.status})")
+                return False
             job = Job(
                 type="move",
                 category=category,

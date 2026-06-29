@@ -51,6 +51,12 @@ def run_move(job_id: int, source_path: str, formatted_name: str,
     dest_dir = os.path.join(settings.media_dir, subdir, formatted_name)
 
     try:
+        # Bail immediately if source is already gone (duplicate job)
+        if not os.path.isdir(source_path):
+            update_job(job_id, status="error",
+                       message=f"Source directory gone (likely already moved by another job).")
+            return
+
         # ── Upgrade detection ─────────────────────────────────────────────────
         # Find any existing copy of this movie before creating dest_dir.
         # Priority: plex_path from DB (reliable even when folder names differ,
