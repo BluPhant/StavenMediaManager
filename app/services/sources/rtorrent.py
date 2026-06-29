@@ -78,11 +78,42 @@ EXT_TYPE_MAP: dict[str, str] = {
 }
 
 
-def detect_type(label: str, file_paths: list[str]) -> str:
+_TV_RE = re.compile(r"[.\s]S\d{2}(?:E\d{2})?[.\s]|[.\s](?:Season|Series)[.\s]?\d", re.IGNORECASE)
+_VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".mov", ".m4v", ".ts"}
+_SAMPLE_RE = re.compile(r"(?:^|[/\\])sample[/\\]|(?:^|[/\\])sample\.", re.IGNORECASE)
+
+
+def _filter_movie_files(file_list: list[str]) -> list[str]:
+    """For movie torrents: keep the main video file + non-video extras (nfo, srt).
+    Exclude sample videos and 'Screens' directories."""
+    videos = []
+    others = []
+    for f in file_list:
+        ext = os.path.splitext(f)[1].lower()
+        basename = os.path.basename(f).lower()
+        # Skip anything in a Sample/ or Screens/ subdirectory
+        if _SAMPLE_RE.search(f) or f.lower().startswith("screens/") or "/screens/" in f.lower():
+            continue
+        if ext in _VIDEO_EXTS:
+            videos.append(f)
+        else:
+            others.append(f)
+    # Keep only the largest video (by name heuristic: the main feature, not a sample)
+    if len(videos) > 1:
+        # If any video has "sample" in name, exclude it
+        non_sample = [v for v in videos if "sample" not in os.path.basename(v).lower()]
+        videos = non_sample if non_sample else videos[:1]
+    return videos + others
+
+
+def detect_type(label: str, file_paths: list[str], name: str = "") -> str:
     if label:
         t = LABEL_TYPE_MAP.get(label.lower().strip())
         if t:
             return t
+    # Check torrent name for TV season/episode markers before extension voting
+    if name and _TV_RE.search(name):
+        return "tv"
     votes: dict[str, int] = {}
     for path in file_paths:
         ext = os.path.splitext(path)[1].lower()
@@ -395,7 +426,7 @@ class RtorrentSource(BaseSource):
             id=hash_,
             name=name,
             remote_path=remote_path,
-            suggested_type=detect_type(label, file_list),
+            suggested_type=detect_type(label, file_list, name),
             size_bytes=size,
             metadata={"label": label, "files": file_list, "is_multi": bool(is_multi)},
         )
@@ -551,7 +582,7 @@ class RtorrentSource(BaseSource):
                 id=hash_,
                 name=name,
                 remote_path=remote_path,
-                suggested_type=detect_type(label, file_list),
+                suggested_type=detect_type(label, file_list, name),
                 size_bytes=int(size),
                 metadata={"label": label, "files": file_list, "is_multi": bool(is_multi)},
             ))
@@ -641,6 +672,10 @@ class RtorrentSource(BaseSource):
             file_list = item.metadata.get("files", [])
             if not file_list:
                 raise RuntimeError(f"No file list available for multi-file torrent {name}")
+
+            # For movies: skip sample files and non-essential extras
+            if item.suggested_type == "movies":
+                file_list = _filter_movie_files(file_list)
 
             transfers = [
                 (f"{ftp_dir}/{f}".replace("//", "/"),
