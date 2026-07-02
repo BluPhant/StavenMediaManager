@@ -51,6 +51,42 @@ def _record_synced(source: str, item_id: str, name: str) -> None:
         db.close()
 
 
+def _auto_extract_if_needed(item_name: str, category: str, source_path: str) -> bool:
+    """
+    If source_path contains RAR archives, submit an extraction job and chain
+    _auto_move_if_matched to run on completion.  Returns True if extraction
+    was queued, False if no archives found (caller proceeds to _auto_move_if_matched).
+    """
+    from .extractor import has_rar_archives
+
+    if not has_rar_archives(source_path):
+        return False
+
+    db = SessionLocal()
+    try:
+        job = Job(
+            type="extract",
+            category=category,
+            item_name=item_name,
+            source_path=source_path,
+            status="pending",
+            progress=0,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        job_id = job.id
+    finally:
+        db.close()
+
+    def _after_extract():
+        _auto_move_if_matched(item_name, category, source_path)
+
+    job_manager.submit_extraction_chained(job_id, source_path, _after_extract)
+    logger.info(f"Auto-extract queued for '{item_name}' (job {job_id})")
+    return True
+
+
 def _auto_move_if_matched(item_name: str, category: str, source_path: str) -> bool:
     """
     Auto-process a freshly downloaded item when no user interaction is required:
@@ -157,8 +193,11 @@ def run_import_by_hash(job_id: int, hash_: str) -> None:
         source.mark_done(item)
         _record_synced(source_name, item.id, item.name)
         logger.info(f"Imported by hash: {item.name} → {dest_dir}")
-        moved = _auto_move_if_matched(item.name, item.suggested_type, dest_dir)
-        msg = f"Imported: {item.name}" + (" — processing queued." if moved else "")
+        queued = (
+            _auto_extract_if_needed(item.name, item.suggested_type, dest_dir)
+            or _auto_move_if_matched(item.name, item.suggested_type, dest_dir)
+        )
+        msg = f"Imported: {item.name}" + (" — processing queued." if queued else "")
         update_job(job_id, status="done", progress=100, message=msg)
     except Exception as exc:
         logger.error(f"Import by hash failed for {hash_}: {exc}", exc_info=True)
@@ -235,7 +274,8 @@ def run_sync(job_id: int) -> None:
             _record_synced(source_name, item.id, item.name)
             downloaded += 1
             logger.info(f"Imported: {item.name} → {dest_dir}")
-            _auto_move_if_matched(item.name, item.suggested_type, dest_dir)
+            if not _auto_extract_if_needed(item.name, item.suggested_type, dest_dir):
+                _auto_move_if_matched(item.name, item.suggested_type, dest_dir)
         except Exception as exc:
             logger.error(f"Failed to import {item.name}: {exc}", exc_info=True)
             errors.append(f"{item.name}: {exc}")

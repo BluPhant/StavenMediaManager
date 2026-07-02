@@ -69,6 +69,14 @@ def submit_extraction(job_id: int, source_path: str) -> None:
     _executor.submit(_guarded, job_id, run_extraction, source_path)
 
 
+def submit_extraction_chained(job_id: int, source_path: str, on_complete) -> None:
+    """Extract archives, then call on_complete() if extraction succeeds."""
+    from ..services.extractor import run_extraction
+
+    update_job(job_id, status="running", progress=0)
+    _executor.submit(_guarded, job_id, run_extraction, source_path, on_complete)
+
+
 def submit_move(job_id: int, source_path: str, formatted_name: str,
                 category: str, imdb_id: str = "") -> None:
     from ..services.mover import run_move

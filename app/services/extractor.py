@@ -9,7 +9,7 @@ from .job_manager import update_job
 logger = logging.getLogger(__name__)
 
 
-def run_extraction(job_id: int, source_path: str) -> None:
+def run_extraction(job_id: int, source_path: str, on_complete=None) -> None:
     update_job(job_id, status="running", progress=2, message="Scanning for archives...")
 
     archives = _find_main_archives(source_path)
@@ -29,7 +29,7 @@ def run_extraction(job_id: int, source_path: str) -> None:
 
         ok, err = _extract_7z(archive_path, source_path, job_id, base_pct, end_pct)
 
-        if not ok and name.lower().endswith(".rar") and shutil.which("unrar"):
+        if not ok and shutil.which("unrar"):
             update_job(job_id, progress=base_pct, message=f"7z failed, retrying with unrar: {name}...")
             logger.info(f"7z failed on {name} ({err}), falling back to unrar")
             ok, err = _extract_unrar(archive_path, source_path, job_id, base_pct, end_pct)
@@ -41,6 +41,12 @@ def run_extraction(job_id: int, source_path: str) -> None:
     removed = _remove_rar_files(source_path)
     _fix_permissions(source_path)
     update_job(job_id, status="done", progress=100, message=f"Extraction complete. Removed {removed} archive file(s).")
+
+    if on_complete:
+        try:
+            on_complete()
+        except Exception as exc:
+            logger.warning(f"Post-extraction callback failed: {exc}")
 
 
 def _extract_7z(archive_path, dest, job_id, base_pct, end_pct):
@@ -126,16 +132,59 @@ def _remove_rar_files(directory: str) -> int:
 
 
 def _find_main_archives(directory: str) -> list[str]:
-    """Return paths to the leading archive in each multi-part set, sorted."""
+    """
+    Return paths to the leading archive in each multi-part set, sorted.
+    Handles two archive naming conventions:
+      - Modern: foo.part1.rar (or foo.rar), foo.part2.rar, ...
+      - Old scene: foo.rar, foo.r00, foo.r01, ...  OR  foo.r00, foo.r01, ... (no .rar)
+    """
     result = []
     try:
-        for name in sorted(os.listdir(directory)):
-            if not name.lower().endswith(".rar"):
-                continue
-            # Skip continuation parts (.part2.rar, .part02.rar, …)
-            if re.search(r"\.part0*[2-9]\d*\.rar$", name, re.IGNORECASE):
-                continue
-            result.append(os.path.join(directory, name))
+        names = sorted(os.listdir(directory))
+
+        # Collect stems that have .r00 parts (old scene split format)
+        r00_stems: set[str] = set()
+        for name in names:
+            if re.search(r"\.r\d{2}$", name, re.IGNORECASE):
+                stem = re.sub(r"\.r\d{2}$", "", name, flags=re.IGNORECASE)
+                r00_stems.add(stem)
+
+        for name in names:
+            lower = name.lower()
+            path = os.path.join(directory, name)
+
+            if lower.endswith(".rar"):
+                # Skip continuation parts (.part2.rar, .part02.rar, …)
+                if re.search(r"\.part0*[2-9]\d*\.rar$", lower):
+                    continue
+                # Skip old-style .rar when a .r00 already covers this stem
+                # (avoids double-extracting the same set)
+                stem = re.sub(r"\.rar$", "", name, flags=re.IGNORECASE)
+                if stem in r00_stems:
+                    continue
+                result.append(path)
+
+            elif re.search(r"\.r00$", lower):
+                # Only use .r00 as the entry point if there's no companion .rar
+                stem = re.sub(r"\.r00$", "", name, flags=re.IGNORECASE)
+                rar_exists = any(
+                    n.lower() == stem.lower() + ".rar" for n in names
+                )
+                if not rar_exists:
+                    result.append(path)
+
     except PermissionError:
         pass
     return result
+
+
+def has_rar_archives(directory: str) -> bool:
+    """Quick check — returns True if the directory contains any RAR archive."""
+    try:
+        for name in os.listdir(directory):
+            lower = name.lower()
+            if lower.endswith(".rar") or re.search(r"\.r\d{2}$", lower):
+                return True
+    except OSError:
+        pass
+    return False
