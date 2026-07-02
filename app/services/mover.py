@@ -79,7 +79,15 @@ def run_switch_move(job_id: int, source_path: str, title_id: int,
                     moved_game_file = name
             update_job(job_id, progress=10 + int(idx / total * 80), message=f"Moved {name}")
 
+        # Remove leftover scene files (.nfo/.sfv/.txt) then the now-empty folder
+        _SCENE_EXTS = {".nfo", ".sfv", ".txt"}
         try:
+            for name in os.listdir(source_path):
+                if os.path.splitext(name)[1].lower() in _SCENE_EXTS:
+                    try:
+                        os.remove(os.path.join(source_path, name))
+                    except OSError:
+                        pass
             os.rmdir(source_path)
         except OSError:
             pass

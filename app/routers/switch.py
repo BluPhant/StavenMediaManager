@@ -234,6 +234,12 @@ def save_match(req: MatchRequest, db: Session = Depends(_db)):
         title_rec = db.query(SwitchTitle).filter(SwitchTitle.game_id == game_id).first()
     if not title_rec and igdb_id:
         title_rec = db.query(SwitchTitle).filter(SwitchTitle.igdb_id == igdb_id).first()
+    # Fallback: match by title so updates/DLC link to an existing base-game record
+    if not title_rec and req.title:
+        from sqlalchemy import func as _func
+        title_rec = db.query(SwitchTitle).filter(
+            _func.lower(SwitchTitle.title) == req.title.strip().lower()
+        ).first()
 
     if not title_rec:
         title_str  = req.title
