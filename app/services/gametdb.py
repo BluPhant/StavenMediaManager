@@ -17,8 +17,8 @@ _GAME_PAGE_URL = "https://www.gametdb.com/Switch/{id}"
 _COVER_URL     = "https://art.gametdb.com/switch/cover/{region}/{id}.jpg"
 
 # Scene filenames: {group}-{ID}.{ext}  e.g. hr-bflta.xci
-# The ID segment is 4-8 alphanumeric chars between the first dash and the extension.
-_SCENE_ID_RE = re.compile(r"^[a-z0-9]+-([a-z0-9]{4,8})(?:_v[\d.]+)?$", re.IGNORECASE)
+# The ID segment is 4-6 alphanumeric chars (GameTDB IDs); longer segments are game names.
+_SCENE_ID_RE = re.compile(r"^[a-z0-9]+-([a-z0-9]{4,6})(?:_v[\d.]+)?$", re.IGNORECASE)
 
 # Torrent folder patterns:
 #   GameTitle_NSW-GROUP           → base

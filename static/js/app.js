@@ -406,7 +406,7 @@ const Views = {
     if (isSwitch) {
       actionBtns.push(`
         <button class="btn btn-success btn-sm" id="btn-switch-move"
-                ${!hasSwitchMatch ? 'disabled title="Save a GameTDB match first"' : ''}
+                ${!hasSwitchMatch ? 'disabled title="Save a match first"' : ''}
                 onclick="SwitchMatch.move(${jsStr(category)}, ${jsStr(itemName)})">
           <i class="bi bi-joystick me-1"></i>Move to Library
         </button>`);
@@ -902,61 +902,74 @@ function _mEl(id) { return document.getElementById(id); }
 // ─────────────────────────────────────────────
 // Switch match panel HTML template
 // ─────────────────────────────────────────────
+function _switchFormHtml() {
+  return `
+    <div class="d-flex gap-2 align-items-end mb-2">
+      <div class="flex-grow-1">
+        <label class="form-label small mb-1 text-secondary">Search by title</label>
+        <input class="form-control form-control-sm bg-dark text-light border-secondary"
+               id="switch-search-input" placeholder="Game title…"
+               onkeydown="if(event.key==='Enter') SwitchMatch.search()">
+      </div>
+      <button class="btn btn-sm btn-outline-secondary" onclick="SwitchMatch.search()">
+        <i class="bi bi-search me-1"></i>Search
+      </button>
+    </div>
+    <div id="switch-search-results" class="mb-1"></div>
+    <div class="d-flex gap-2 align-items-end mb-2">
+      <div class="flex-grow-1">
+        <label class="form-label small mb-1 text-secondary">GameTDB ID (e.g. BFLTA)</label>
+        <input class="form-control form-control-sm bg-dark text-light border-secondary"
+               id="switch-id-input" placeholder="From gametdb.com/Switch/XXXXX URL"
+               onkeydown="if(event.key==='Enter') SwitchMatch.lookup()">
+      </div>
+      <button class="btn btn-sm btn-outline-secondary" onclick="SwitchMatch.lookup()">
+        <i class="bi bi-joystick me-1"></i>Look Up
+      </button>
+    </div>
+    <div class="d-flex gap-2 mb-2">
+      <select class="form-select form-select-sm bg-dark text-light border-secondary" id="switch-type-select" style="max-width:140px">
+        <option value="base">Base Game</option>
+        <option value="update">Update</option>
+        <option value="dlc">DLC</option>
+      </select>
+      <input class="form-control form-control-sm bg-dark text-light border-secondary"
+             id="switch-version-input" placeholder="Version (e.g. 1.0.3)" style="max-width:160px">
+    </div>
+    <div id="switch-lookup-result"></div>`;
+}
+
 function _switchMatchPanelHtml() {
   return `
     <div class="card border-secondary mt-4" id="switch-match-panel">
       <div class="card-header d-flex justify-content-between align-items-center py-2">
-        <span class="small fw-semibold"><i class="bi bi-joystick me-2 text-success"></i>GameTDB Match</span>
+        <span class="small fw-semibold"><i class="bi bi-joystick me-2 text-success"></i>Switch Match</span>
       </div>
       <div class="card-body p-3">
-        <div id="switch-match-body">
-          <div class="d-flex gap-2 align-items-end mb-2">
-            <div class="flex-grow-1">
-              <label class="form-label small mb-1 text-secondary">GameTDB ID (e.g. BFLTA)</label>
-              <input class="form-control form-control-sm bg-dark text-light border-secondary"
-                     id="switch-id-input" placeholder="5-char ID from gametdb.com/Switch/XXXXX"
-                     onkeydown="if(event.key==='Enter') SwitchMatch.lookup()">
-            </div>
-            <button class="btn btn-sm btn-outline-secondary" onclick="SwitchMatch.lookup()">
-              <i class="bi bi-search me-1"></i>Look Up
-            </button>
-          </div>
-          <div id="switch-content-type" class="d-flex gap-2 mb-2">
-            <select class="form-select form-select-sm bg-dark text-light border-secondary" id="switch-type-select" style="max-width:140px">
-              <option value="base">Base Game</option>
-              <option value="update">Update</option>
-              <option value="dlc">DLC</option>
-            </select>
-            <input class="form-control form-control-sm bg-dark text-light border-secondary"
-                   id="switch-version-input" placeholder="Version (e.g. 1.0.3)" style="max-width:160px">
-          </div>
-          <div id="switch-lookup-result"></div>
-        </div>
+        <div id="switch-match-body">${_switchFormHtml()}</div>
       </div>
     </div>`;
 }
 
 // ─────────────────────────────────────────────
-// SwitchMatch — GameTDB lookup & persistence
+// SwitchMatch — title search, lookup & persistence
 // ─────────────────────────────────────────────
 const SwitchMatch = {
   _category: null,
   _itemName: null,
+  _searchResults: [],
 
   init(category, itemName, existingContent, detect) {
     this._category = category;
     this._itemName = itemName;
+    this._searchResults = [];
 
     if (existingContent && existingContent.title) {
       this._renderMatch(existingContent);
       return;
     }
 
-    // Auto-populate from detection
     if (detect) {
-      if (detect.game_id) {
-        _mEl('switch-id-input').value = detect.game_id;
-      }
       if (detect.content_type) {
         const sel = _mEl('switch-type-select');
         if (sel) sel.value = detect.content_type;
@@ -965,55 +978,157 @@ const SwitchMatch = {
         const vi = _mEl('switch-version-input');
         if (vi) vi.value = detect.version;
       }
-      // If we have a confident auto-detected ID, trigger lookup immediately
+      // nswdb auto-match: show a ready-to-confirm card
+      if (detect.nswdb_title && !detect.game_id) {
+        this._searchResults = [{
+          source: 'nswdb',
+          igdb_id: null,
+          game_id: null,
+          title: detect.nswdb_title,
+          cover_url: null,
+          subtitle: detect.nswdb_publisher || 'scene database match',
+          publisher: detect.nswdb_publisher || null,
+          developer: null,
+          nintendo_id: detect.nintendo_id || null,
+        }];
+        const lu = _mEl('switch-lookup-result');
+        if (lu) lu.innerHTML = this._resultCardHtml(this._searchResults[0], 0);
+      }
+      // GameTDB ID detected — trigger live lookup
       if (detect.game_id) {
+        if (_mEl('switch-id-input')) _mEl('switch-id-input').value = detect.game_id;
         this.lookup();
       }
     }
   },
+
+  // ── Inline title search ───────────────────────────────────────────────────
+
+  async search() {
+    const q = (_mEl('switch-search-input')?.value || '').trim();
+    if (!q) { toast('Enter a title to search', 'warning'); return; }
+
+    const resEl = _mEl('switch-search-results');
+    resEl.innerHTML = `<div class="text-secondary small py-1"><i class="bi bi-hourglass-split me-1"></i>Searching…</div>`;
+    this._searchResults = [];
+
+    try {
+      const data = await API.get(`/switch/search?q=${enc(q)}`);
+
+      const igdbItems = (data.igdb || []).map(r => ({
+        source: 'igdb', igdb_id: r.igdb_id, game_id: null,
+        title: r.title, cover_url: r.cover_url,
+        subtitle: [r.publisher, r.year ? `(${r.year})` : null].filter(Boolean).join(' '),
+        publisher: r.publisher, developer: r.developer, nintendo_id: null,
+      }));
+
+      const igdbLow = new Set(igdbItems.map(i => i.title.toLowerCase()));
+      const nswdbItems = (data.nswdb || [])
+        .filter(r => !igdbLow.has(r.name.toLowerCase()))
+        .map(r => ({
+          source: 'nswdb', igdb_id: null, game_id: null,
+          title: r.name, cover_url: null,
+          subtitle: r.publisher || '',
+          publisher: r.publisher, developer: null, nintendo_id: r.titleid,
+        }));
+
+      this._searchResults = [...igdbItems, ...nswdbItems];
+
+      if (!this._searchResults.length) {
+        resEl.innerHTML = `<div class="text-secondary small py-1">No results</div>`;
+        return;
+      }
+
+      resEl.innerHTML =
+        `<div class="border border-secondary rounded overflow-hidden mb-2">` +
+        this._searchResults.map((item, idx) => `
+          <div class="d-flex align-items-center gap-2 p-2${idx ? ' border-top border-secondary' : ''}">
+            ${item.cover_url
+              ? `<img src="${esc(item.cover_url)}" style="height:44px;border-radius:3px;flex-shrink:0" onerror="this.style.display='none'">`
+              : `<div class="d-flex align-items-center justify-content-center bg-secondary rounded flex-shrink-0" style="width:30px;height:44px"><i class="bi bi-joystick text-dark" style="font-size:.7rem"></i></div>`}
+            <div class="flex-grow-1 overflow-hidden">
+              <div class="small fw-semibold text-truncate">${esc(item.title)}</div>
+              ${item.subtitle ? `<div class="text-secondary" style="font-size:.72rem">${esc(item.subtitle)}</div>` : ''}
+            </div>
+            <button class="btn btn-sm btn-outline-success flex-shrink-0" onclick="SwitchMatch._useResult(${idx})">Use</button>
+          </div>`).join('') +
+        `</div>`;
+    } catch (e) {
+      resEl.innerHTML = `<div class="alert alert-warning mt-1 py-2 small">${esc(e.message)}</div>`;
+    }
+  },
+
+  _useResult(idx) {
+    const item = this._searchResults[idx];
+    if (!item) return;
+    const resEl = _mEl('switch-search-results');
+    if (resEl) resEl.innerHTML = '';
+    const lu = _mEl('switch-lookup-result');
+    if (lu) lu.innerHTML = this._resultCardHtml(item, idx);
+  },
+
+  _resultCardHtml(item, idx) {
+    return `
+      <div class="d-flex align-items-center gap-3 p-2 bg-dark rounded border border-secondary mt-1">
+        ${item.cover_url
+          ? `<img src="${esc(item.cover_url)}" style="height:72px;border-radius:4px" onerror="this.style.display='none'">`
+          : `<div class="d-flex align-items-center justify-content-center bg-secondary rounded" style="width:48px;height:72px"><i class="bi bi-joystick text-dark"></i></div>`}
+        <div class="flex-grow-1 min-w-0">
+          <div class="fw-semibold">${esc(item.title)}</div>
+          <div class="text-secondary small">${esc(item.subtitle || item.source)}</div>
+        </div>
+        <button class="btn btn-success btn-sm flex-shrink-0" onclick="SwitchMatch._confirmResult(${idx})">
+          <i class="bi bi-check-lg me-1"></i>Confirm
+        </button>
+      </div>`;
+  },
+
+  async _confirmResult(idx) {
+    const item = this._searchResults[idx];
+    if (!item) return;
+    const contentType = _mEl('switch-type-select')?.value || 'base';
+    const version = _mEl('switch-version-input')?.value?.trim() || null;
+    const payload = {
+      category: this._category, item_name: this._itemName,
+      content_type: contentType, version: version || null,
+      title: item.title, publisher: item.publisher || null, developer: item.developer || null,
+    };
+    if (item.igdb_id)     payload.igdb_id = item.igdb_id;
+    if (item.cover_url)   payload.cover_url = item.cover_url;
+    if (item.nintendo_id) payload.nintendo_id = item.nintendo_id;
+    await this._doMatch(payload, item.title);
+  },
+
+  // ── GameTDB direct lookup ─────────────────────────────────────────────────
 
   async lookup() {
     const gameId = (_mEl('switch-id-input')?.value || '').trim().toUpperCase();
     if (!gameId) { toast('Enter a GameTDB ID first', 'warning'); return; }
 
     const res = _mEl('switch-lookup-result');
-    res.innerHTML = `<div class="text-secondary small"><i class="bi bi-hourglass-split me-1"></i>Looking up ${gameId}…</div>`;
+    res.innerHTML = `<div class="text-secondary small py-1"><i class="bi bi-hourglass-split me-1"></i>Looking up ${gameId}…</div>`;
 
     try {
       const game = await API.get(`/switch/lookup/${enc(gameId)}`);
-      res.innerHTML = `
-        <div class="d-flex align-items-center gap-3 p-2 bg-dark rounded border border-secondary mt-2">
-          ${game.cover_url
-            ? `<img src="${esc(game.cover_url)}" style="height:80px;border-radius:4px" onerror="this.style.display='none'">`
-            : `<div class="d-flex align-items-center justify-content-center bg-secondary rounded" style="width:52px;height:80px"><i class="bi bi-joystick text-dark"></i></div>`}
-          <div class="flex-grow-1">
-            <div class="fw-semibold">${esc(game.title)}</div>
-            <div class="text-secondary small">${esc(game.game_id)}${game.developer ? ' · ' + esc(game.developer) : ''}</div>
-          </div>
-          <button class="btn btn-success btn-sm" onclick="SwitchMatch._confirm(${jsStr(gameId)}, ${jsStr(game.title)})">
-            <i class="bi bi-check-lg me-1"></i>Confirm
-          </button>
-        </div>`;
+      this._searchResults = [{
+        source: 'gametdb', igdb_id: null, game_id: gameId,
+        title: game.title, cover_url: game.cover_url,
+        subtitle: [game.game_id, game.developer].filter(Boolean).join(' · '),
+        publisher: game.publisher, developer: game.developer, nintendo_id: null,
+      }];
+      res.innerHTML = this._resultCardHtml(this._searchResults[0], 0);
     } catch (e) {
-      res.innerHTML = `<div class="alert alert-warning mt-2 py-2 small">${esc(e.message)}</div>`;
+      res.innerHTML = `<div class="alert alert-warning mt-1 py-2 small">${esc(e.message)}</div>`;
     }
   },
 
-  async _confirm(gameId, title) {
-    const contentType = _mEl('switch-type-select')?.value || 'base';
-    const version     = _mEl('switch-version-input')?.value?.trim() || null;
+  // ── Shared confirm helper ─────────────────────────────────────────────────
+
+  async _doMatch(payload, title) {
     try {
-      const result = await API.post('/switch/match', {
-        category:     this._category,
-        item_name:    this._itemName,
-        game_id:      gameId,
-        content_type: contentType,
-        version:      version || null,
-      });
-      // Reload content for this item
+      await API.post('/switch/match', payload);
       const content = await API.get(`/switch/content?item_name=${enc(this._itemName)}`).catch(() => null);
       this._renderMatch(content);
-      // Enable move button
       const btn = _mEl('btn-switch-move');
       if (btn) { btn.disabled = false; btn.removeAttribute('title'); }
       toast(`Matched: ${title}`, 'success');
@@ -1037,10 +1152,10 @@ const SwitchMatch = {
   async clear() {
     try {
       await API.delete(`/switch/content?item_name=${enc(this._itemName)}`);
-      _mEl('switch-match-body').innerHTML = _mEl('switch-match-panel').querySelector('.card-body').innerHTML;
-      SwitchMatch.init(this._category, this._itemName, null, null);
+      _mEl('switch-match-body').innerHTML = _switchFormHtml();
+      this._searchResults = [];
       const btn = _mEl('btn-switch-move');
-      if (btn) { btn.disabled = true; btn.title = 'Save a GameTDB match first'; }
+      if (btn) { btn.disabled = true; btn.title = 'Save a match first'; }
       toast('Match cleared', 'secondary');
     } catch (e) {
       toast(`Clear failed: ${e.message}`, 'danger');
@@ -1051,6 +1166,7 @@ const SwitchMatch = {
     if (!content || !content.title) return;
     const t = content.title;
     const typeLabel = { base: 'Base Game', update: 'Update', dlc: 'DLC' }[content.content_type] || content.content_type;
+    const idLine = [t.game_id, t.igdb_id ? `IGDB:${t.igdb_id}` : null].filter(Boolean).join(' · ');
     _mEl('switch-match-body').innerHTML = `
       <div class="d-flex align-items-center gap-3">
         ${t.cover_url
@@ -1059,8 +1175,7 @@ const SwitchMatch = {
         <div class="flex-grow-1 min-w-0">
           <div class="fw-semibold">${esc(t.title)}</div>
           <div class="text-secondary small">
-            ${esc(t.game_id)}
-            <span class="badge bg-secondary ms-1">${esc(typeLabel)}</span>
+            ${idLine ? esc(idLine) + ' ' : ''}<span class="badge bg-secondary">${esc(typeLabel)}</span>
             ${content.version ? `<span class="text-secondary ms-1">v${esc(content.version)}</span>` : ''}
           </div>
           ${t.developer ? `<div class="text-secondary" style="font-size:.75rem">${esc(t.developer)}</div>` : ''}

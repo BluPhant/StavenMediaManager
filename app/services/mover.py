@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -85,7 +86,7 @@ def run_switch_move(job_id: int, source_path: str, title_id: int,
 
         _fix_permissions(dest_dir)
 
-        # Update DB records
+        # Update DB records + write metadata to library folder
         from ..database import SessionLocal
         from ..models import SwitchContent, SwitchTitle
         db = SessionLocal()
@@ -102,6 +103,7 @@ def run_switch_move(job_id: int, source_path: str, title_id: int,
             t = db.query(SwitchTitle).filter(SwitchTitle.id == title_id).first()
             if t:
                 t.library_path = dest_dir
+                _write_switch_metadata(dest_dir, t, db)
             db.commit()
         finally:
             db.close()
@@ -405,6 +407,50 @@ def _find_existing_movie_folder(imdb_id: str) -> str | None:
         return None
     finally:
         db.close()
+
+
+def _write_switch_metadata(dest_dir: str, title, db) -> None:
+    """Write cover.jpg and metadata.json into the Switch game library folder."""
+    # cover.jpg
+    cover_dest = os.path.join(dest_dir, "cover.jpg")
+    if not os.path.exists(cover_dest):
+        if title.cover_local and os.path.exists(title.cover_local):
+            try:
+                shutil.copy2(title.cover_local, cover_dest)
+            except OSError as exc:
+                logger.warning(f"Cover copy failed: {exc}")
+        elif title.cover_url:
+            try:
+                req = urllib.request.Request(
+                    title.cover_url, headers={"User-Agent": "StavenMediaManager/1.0"}
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    if resp.status == 200:
+                        with open(cover_dest, "wb") as f:
+                            f.write(resp.read())
+            except Exception as exc:
+                logger.warning(f"Cover download to library failed: {exc}")
+
+    # Point cover_local at the library copy
+    if os.path.exists(cover_dest):
+        title.cover_local = cover_dest
+
+    # metadata.json
+    meta_dest = os.path.join(dest_dir, "metadata.json")
+    try:
+        metadata = {
+            "title":       title.title,
+            "game_id":     title.game_id,
+            "igdb_id":     title.igdb_id,
+            "nintendo_id": title.nintendo_id,
+            "developer":   title.developer,
+            "publisher":   title.publisher,
+            "cover_url":   title.cover_url,
+        }
+        with open(meta_dest, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        logger.warning(f"metadata.json write failed: {exc}")
 
 
 def _translate_plex_path(plex_file_path: str) -> str | None:

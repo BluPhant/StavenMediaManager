@@ -143,12 +143,14 @@ class SwitchTitle(Base):
     __tablename__ = "switch_titles"
 
     id           = Column(Integer, primary_key=True, index=True)
-    game_id      = Column(String(20), unique=True, nullable=False)   # GameTDB ID, e.g. BFLTA
-    title        = Column(String(500), nullable=False)               # canonical EN title
+    game_id      = Column(String(20), unique=True, nullable=True)    # GameTDB 5-char ID (e.g. BFLTA); NULL for IGDB-only entries
+    igdb_id      = Column(Integer, unique=True, nullable=True)       # IGDB numeric ID
+    nintendo_id  = Column(String(30), nullable=True)                 # Nintendo 64-bit Title ID from nswdb
+    title        = Column(String(500), nullable=False)
     developer    = Column(String(200), nullable=True)
     publisher    = Column(String(200), nullable=True)
-    cover_url    = Column(String(500), nullable=True)                # GameTDB cover art URL
-    cover_local  = Column(String(500), nullable=True)                # cached path on disk
+    cover_url    = Column(String(500), nullable=True)                # cover art URL (GameTDB or IGDB CDN)
+    cover_local  = Column(String(500), nullable=True)                # cached .jpg path on disk
     library_path = Column(String(1000), nullable=True)               # /media/games/switch/Title/
     created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     # DISCOGS_TOKEN — get one at https://www.discogs.com/settings/developers
     discogs_token: str = ""
 
+    # ── IGDB (optional) — Switch game search via Twitch API ───────────────────
+    # Register at https://dev.twitch.tv/console then enable IGDB access.
+    # IGDB_CLIENT_ID     Twitch application client ID
+    # IGDB_CLIENT_SECRET Twitch application client secret
+    igdb_client_id: str = ""
+    igdb_client_secret: str = ""
+
     # ── Build info (injected by Docker ARG→ENV at image build time) ───────────
     app_version:    str = "dev"
     app_revision:   str = ""
