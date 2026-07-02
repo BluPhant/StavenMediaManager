@@ -135,42 +135,29 @@ def _find_main_archives(directory: str) -> list[str]:
     """
     Return paths to the leading archive in each multi-part set, sorted.
     Handles two archive naming conventions:
-      - Modern: foo.part1.rar (or foo.rar), foo.part2.rar, ...
-      - Old scene: foo.rar, foo.r00, foo.r01, ...  OR  foo.r00, foo.r01, ... (no .rar)
+      - Modern:    foo.part1.rar, foo.part2.rar, ...  (entry: part1)
+      - Old scene: foo.rar, foo.r00, foo.r01, ...     (entry: .rar)
+      - Old scene (no .rar): foo.r00, foo.r01, ...    (entry: .r00)
     """
     result = []
     try:
         names = sorted(os.listdir(directory))
-
-        # Collect stems that have .r00 parts (old scene split format)
-        r00_stems: set[str] = set()
-        for name in names:
-            if re.search(r"\.r\d{2}$", name, re.IGNORECASE):
-                stem = re.sub(r"\.r\d{2}$", "", name, flags=re.IGNORECASE)
-                r00_stems.add(stem)
+        names_lower = {n.lower() for n in names}
 
         for name in names:
             lower = name.lower()
             path = os.path.join(directory, name)
 
             if lower.endswith(".rar"):
-                # Skip continuation parts (.part2.rar, .part02.rar, …)
+                # Skip numbered continuation parts (.part2.rar, .part02.rar, …)
                 if re.search(r"\.part0*[2-9]\d*\.rar$", lower):
-                    continue
-                # Skip old-style .rar when a .r00 already covers this stem
-                # (avoids double-extracting the same set)
-                stem = re.sub(r"\.rar$", "", name, flags=re.IGNORECASE)
-                if stem in r00_stems:
                     continue
                 result.append(path)
 
             elif re.search(r"\.r00$", lower):
-                # Only use .r00 as the entry point if there's no companion .rar
-                stem = re.sub(r"\.r00$", "", name, flags=re.IGNORECASE)
-                rar_exists = any(
-                    n.lower() == stem.lower() + ".rar" for n in names
-                )
-                if not rar_exists:
+                # .r00 is the entry point only when there is no companion .rar
+                stem = re.sub(r"\.r00$", "", lower)
+                if stem + ".rar" not in names_lower:
                     result.append(path)
 
     except PermissionError:
