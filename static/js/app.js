@@ -361,12 +361,19 @@ const Views = {
   async item(category, itemName) {
     this._loading();
     const isMovies = /movie/i.test(category);
-    const isMusic = /music/i.test(category);
-    let detail, matchData;
+    const isMusic  = /music/i.test(category);
+    const isSwitch = /switch/i.test(category);
+    let detail, matchData, switchData, switchDetect;
     try {
       const fetches = [API.get(`/categories/${enc(category)}/items/${enc(itemName)}`)];
       if (isMovies) fetches.push(API.get(`/movies/match?category=${enc(category)}&item=${enc(itemName)}`));
       [detail, matchData] = await Promise.all(fetches);
+      if (isSwitch) {
+        [switchData, switchDetect] = await Promise.all([
+          API.get(`/switch/content?item_name=${enc(itemName)}`).catch(() => null),
+          API.get(`/switch/detect?item_name=${enc(itemName)}&category=${enc(category)}`).catch(() => null),
+        ]);
+      }
     } catch (e) {
       this._setApp(`<div class="alert alert-danger mt-2">Failed to load item: ${esc(e.message)}</div>`);
       return;
@@ -378,7 +385,8 @@ const Views = {
       [esc(itemName)],
     ]);
 
-    const hasMatch = !!(matchData && matchData.match);
+    const hasMatch       = !!(matchData && matchData.match);
+    const hasSwitchMatch = !!(switchData && switchData.title);
     const actionBtns = [];
     if (detail.has_rar) {
       actionBtns.push(`
@@ -393,6 +401,14 @@ const Views = {
                 ${!hasMatch ? 'disabled title="Save an IMDB match first"' : ''}
                 onclick="Actions.move(${jsStr(category)}, ${jsStr(itemName)})">
           <i class="bi bi-box-arrow-right me-1"></i>Move to Library
+        </button>`);
+    }
+    if (isSwitch) {
+      actionBtns.push(`
+        <button class="btn btn-success btn-sm" id="btn-switch-move"
+                ${!hasSwitchMatch ? 'disabled title="Save a GameTDB match first"' : ''}
+                onclick="SwitchMatch.move(${jsStr(category)}, ${jsStr(itemName)})">
+          <i class="bi bi-joystick me-1"></i>Move to Library
         </button>`);
     }
     if (isMusic) {
@@ -412,7 +428,7 @@ const Views = {
         <td class="text-secondary text-nowrap">${f.is_dir ? '—' : f.size_human}</td>
       </tr>`).join('');
 
-    this._setApp(crumb + (isMovies ? _matchPanelHtml() : '') + (isMusic ? _musicMatchPanelHtml() : '') + actionsHtml + `
+    this._setApp(crumb + (isMovies ? _matchPanelHtml() : '') + (isMusic ? _musicMatchPanelHtml() : '') + (isSwitch ? _switchMatchPanelHtml() : '') + actionsHtml + `
       <div class="table-responsive">
         <table class="table table-hover table-dark file-table">
           <thead><tr class="text-secondary"><th>File</th><th>Size</th></tr></thead>
@@ -425,6 +441,9 @@ const Views = {
     }
     if (isMusic) {
       MusicMatch.init(category, itemName);
+    }
+    if (isSwitch) {
+      SwitchMatch.init(category, itemName, switchData, switchDetect);
     }
   },
 };
@@ -879,6 +898,186 @@ const MusicMatch = {
 };
 
 function _mEl(id) { return document.getElementById(id); }
+
+// ─────────────────────────────────────────────
+// Switch match panel HTML template
+// ─────────────────────────────────────────────
+function _switchMatchPanelHtml() {
+  return `
+    <div class="card border-secondary mt-4" id="switch-match-panel">
+      <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <span class="small fw-semibold"><i class="bi bi-joystick me-2 text-success"></i>GameTDB Match</span>
+      </div>
+      <div class="card-body p-3">
+        <div id="switch-match-body">
+          <div class="d-flex gap-2 align-items-end mb-2">
+            <div class="flex-grow-1">
+              <label class="form-label small mb-1 text-secondary">GameTDB ID (e.g. BFLTA)</label>
+              <input class="form-control form-control-sm bg-dark text-light border-secondary"
+                     id="switch-id-input" placeholder="5-char ID from gametdb.com/Switch/XXXXX"
+                     onkeydown="if(event.key==='Enter') SwitchMatch.lookup()">
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" onclick="SwitchMatch.lookup()">
+              <i class="bi bi-search me-1"></i>Look Up
+            </button>
+          </div>
+          <div id="switch-content-type" class="d-flex gap-2 mb-2">
+            <select class="form-select form-select-sm bg-dark text-light border-secondary" id="switch-type-select" style="max-width:140px">
+              <option value="base">Base Game</option>
+              <option value="update">Update</option>
+              <option value="dlc">DLC</option>
+            </select>
+            <input class="form-control form-control-sm bg-dark text-light border-secondary"
+                   id="switch-version-input" placeholder="Version (e.g. 1.0.3)" style="max-width:160px">
+          </div>
+          <div id="switch-lookup-result"></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────────
+// SwitchMatch — GameTDB lookup & persistence
+// ─────────────────────────────────────────────
+const SwitchMatch = {
+  _category: null,
+  _itemName: null,
+
+  init(category, itemName, existingContent, detect) {
+    this._category = category;
+    this._itemName = itemName;
+
+    if (existingContent && existingContent.title) {
+      this._renderMatch(existingContent);
+      return;
+    }
+
+    // Auto-populate from detection
+    if (detect) {
+      if (detect.game_id) {
+        _mEl('switch-id-input').value = detect.game_id;
+      }
+      if (detect.content_type) {
+        const sel = _mEl('switch-type-select');
+        if (sel) sel.value = detect.content_type;
+      }
+      if (detect.version) {
+        const vi = _mEl('switch-version-input');
+        if (vi) vi.value = detect.version;
+      }
+      // If we have a confident auto-detected ID, trigger lookup immediately
+      if (detect.game_id) {
+        this.lookup();
+      }
+    }
+  },
+
+  async lookup() {
+    const gameId = (_mEl('switch-id-input')?.value || '').trim().toUpperCase();
+    if (!gameId) { toast('Enter a GameTDB ID first', 'warning'); return; }
+
+    const res = _mEl('switch-lookup-result');
+    res.innerHTML = `<div class="text-secondary small"><i class="bi bi-hourglass-split me-1"></i>Looking up ${gameId}…</div>`;
+
+    try {
+      const game = await API.get(`/switch/lookup/${enc(gameId)}`);
+      res.innerHTML = `
+        <div class="d-flex align-items-center gap-3 p-2 bg-dark rounded border border-secondary mt-2">
+          ${game.cover_url
+            ? `<img src="${esc(game.cover_url)}" style="height:80px;border-radius:4px" onerror="this.style.display='none'">`
+            : `<div class="d-flex align-items-center justify-content-center bg-secondary rounded" style="width:52px;height:80px"><i class="bi bi-joystick text-dark"></i></div>`}
+          <div class="flex-grow-1">
+            <div class="fw-semibold">${esc(game.title)}</div>
+            <div class="text-secondary small">${esc(game.game_id)}${game.developer ? ' · ' + esc(game.developer) : ''}</div>
+          </div>
+          <button class="btn btn-success btn-sm" onclick="SwitchMatch._confirm(${jsStr(gameId)}, ${jsStr(game.title)})">
+            <i class="bi bi-check-lg me-1"></i>Confirm
+          </button>
+        </div>`;
+    } catch (e) {
+      res.innerHTML = `<div class="alert alert-warning mt-2 py-2 small">${esc(e.message)}</div>`;
+    }
+  },
+
+  async _confirm(gameId, title) {
+    const contentType = _mEl('switch-type-select')?.value || 'base';
+    const version     = _mEl('switch-version-input')?.value?.trim() || null;
+    try {
+      const result = await API.post('/switch/match', {
+        category:     this._category,
+        item_name:    this._itemName,
+        game_id:      gameId,
+        content_type: contentType,
+        version:      version || null,
+      });
+      // Reload content for this item
+      const content = await API.get(`/switch/content?item_name=${enc(this._itemName)}`).catch(() => null);
+      this._renderMatch(content);
+      // Enable move button
+      const btn = _mEl('btn-switch-move');
+      if (btn) { btn.disabled = false; btn.removeAttribute('title'); }
+      toast(`Matched: ${title}`, 'success');
+    } catch (e) {
+      toast(`Match failed: ${e.message}`, 'danger');
+    }
+  },
+
+  async move(category, itemName) {
+    try {
+      const r = await API.post('/switch/move', { category, item_name: itemName });
+      JobPoller.track(r.job_id, { type: 'move', category, itemName });
+      JobsPanel.open();
+      toast(`Moving to library — Job #${r.job_id}`, 'success');
+      Router.go('/');
+    } catch (e) {
+      toast(`Move failed: ${e.message}`, 'danger');
+    }
+  },
+
+  async clear() {
+    try {
+      await API.delete(`/switch/content?item_name=${enc(this._itemName)}`);
+      _mEl('switch-match-body').innerHTML = _mEl('switch-match-panel').querySelector('.card-body').innerHTML;
+      SwitchMatch.init(this._category, this._itemName, null, null);
+      const btn = _mEl('btn-switch-move');
+      if (btn) { btn.disabled = true; btn.title = 'Save a GameTDB match first'; }
+      toast('Match cleared', 'secondary');
+    } catch (e) {
+      toast(`Clear failed: ${e.message}`, 'danger');
+    }
+  },
+
+  _renderMatch(content) {
+    if (!content || !content.title) return;
+    const t = content.title;
+    const typeLabel = { base: 'Base Game', update: 'Update', dlc: 'DLC' }[content.content_type] || content.content_type;
+    _mEl('switch-match-body').innerHTML = `
+      <div class="d-flex align-items-center gap-3">
+        ${t.cover_url
+          ? `<img src="${esc(t.cover_url)}" style="height:80px;border-radius:4px" onerror="this.style.display='none'">`
+          : `<div class="d-flex align-items-center justify-content-center bg-secondary rounded" style="width:52px;height:80px"><i class="bi bi-joystick text-dark"></i></div>`}
+        <div class="flex-grow-1 min-w-0">
+          <div class="fw-semibold">${esc(t.title)}</div>
+          <div class="text-secondary small">
+            ${esc(t.game_id)}
+            <span class="badge bg-secondary ms-1">${esc(typeLabel)}</span>
+            ${content.version ? `<span class="text-secondary ms-1">v${esc(content.version)}</span>` : ''}
+          </div>
+          ${t.developer ? `<div class="text-secondary" style="font-size:.75rem">${esc(t.developer)}</div>` : ''}
+          <div class="mt-1">
+            ${(t.contents || []).map(c => {
+              const lbl = { base: '🎮 Base', update: '🔄 Update', dlc: '📦 DLC' }[c.content_type] || c.content_type;
+              return `<span class="badge bg-dark border border-secondary me-1 small">${lbl}${c.version ? ' v'+esc(c.version) : ''}</span>`;
+            }).join('')}
+          </div>
+        </div>
+        <button class="btn btn-sm btn-outline-danger flex-shrink-0"
+                onclick="SwitchMatch.clear()" title="Clear match">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>`;
+  },
+};
 
 // ─────────────────────────────────────────────
 // Actions

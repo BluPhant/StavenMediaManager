@@ -24,9 +24,10 @@ DEST_MAP: dict[str, str] = {
     "music":        "music",
     "books":        "books",
     "ebooks":       "ebooks",
-    "games":        "games",
-    "switch games": "switch-games",
-    "pc games":     "pc-games",
+    "games":         "games",
+    "switch games":  "games/switch",
+    "switch-games":  "games/switch",
+    "pc games":      "pc-games",
 }
 
 # Plex section type by category name
@@ -41,6 +42,76 @@ PLEX_TYPE_MAP: dict[str, str] = {
 
 def dest_subdir(category: str) -> str:
     return DEST_MAP.get(category.lower(), category.lower())
+
+
+def run_switch_move(job_id: int, source_path: str, title_id: int,
+                    content_id: int, dest_dir: str) -> None:
+    """
+    Move a Switch game / update / DLC into the library folder.
+    Unlike movies, we accumulate — files are added to dest_dir, never replaced.
+    After the move, SwitchContent.library_path and SwitchTitle.library_path are updated.
+    """
+    update_job(job_id, status="running", progress=5, message="Preparing Switch library folder…")
+
+    if not os.path.isdir(source_path):
+        update_job(job_id, status="error",
+                   message="Source directory gone (duplicate job?)")
+        return
+
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        entries = [e for e in os.listdir(source_path)
+                   if not e.lower().endswith((".nfo", ".sfv", ".txt"))]
+        total = max(len(entries), 1)
+        update_job(job_id, progress=10, message=f"Moving {total} file(s) into library…")
+
+        moved_game_file = None
+        for idx, name in enumerate(entries, 1):
+            src = os.path.join(source_path, name)
+            dst = os.path.join(dest_dir, name)
+            # Skip if destination already has this file (idempotent)
+            if os.path.exists(dst):
+                logger.info(f"Switch move: skipping {name} — already at destination")
+            else:
+                shutil.move(src, dst)
+                if os.path.splitext(name)[1].lower() in (".xci", ".nsp", ".nsz"):
+                    moved_game_file = name
+            update_job(job_id, progress=10 + int(idx / total * 80), message=f"Moved {name}")
+
+        try:
+            os.rmdir(source_path)
+        except OSError:
+            pass
+
+        _fix_permissions(dest_dir)
+
+        # Update DB records
+        from ..database import SessionLocal
+        from ..models import SwitchContent, SwitchTitle
+        db = SessionLocal()
+        try:
+            content = db.query(SwitchContent).filter(SwitchContent.id == content_id).first()
+            if content:
+                if moved_game_file:
+                    content.filename = moved_game_file
+                    content.library_path = os.path.join(dest_dir, moved_game_file)
+                    try:
+                        content.file_size = os.path.getsize(content.library_path)
+                    except OSError:
+                        pass
+            t = db.query(SwitchTitle).filter(SwitchTitle.id == title_id).first()
+            if t:
+                t.library_path = dest_dir
+            db.commit()
+        finally:
+            db.close()
+
+        update_job(job_id, status="done", progress=100, dest_path=dest_dir,
+                   message=f"Switch content moved to {dest_dir}")
+
+    except Exception as exc:
+        update_job(job_id, status="error", message=str(exc))
+        raise
 
 
 def run_move(job_id: int, source_path: str, formatted_name: str,

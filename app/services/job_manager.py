@@ -77,6 +77,14 @@ def submit_extraction_chained(job_id: int, source_path: str, on_complete) -> Non
     _executor.submit(_guarded, job_id, run_extraction, source_path, on_complete)
 
 
+def submit_switch_move(job_id: int, source_path: str, title_id: int,
+                       content_id: int, dest_dir: str) -> None:
+    from ..services.mover import run_switch_move
+
+    update_job(job_id, status="running", progress=0)
+    _executor.submit(_guarded, job_id, run_switch_move, source_path, title_id, content_id, dest_dir)
+
+
 def submit_move(job_id: int, source_path: str, formatted_name: str,
                 category: str, imdb_id: str = "") -> None:
     from ..services.mover import run_move

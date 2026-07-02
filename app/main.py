@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .database import Base, engine
-from .routers import about, btn, categories, iptorrents, jobs, library, movies, music, sources
+from .routers import about, btn, categories, iptorrents, jobs, library, movies, music, sources, switch
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ app.include_router(library.router, prefix="/api")
 app.include_router(movies.router, prefix="/api")
 app.include_router(music.router, prefix="/api")
 app.include_router(sources.router, prefix="/api")
+app.include_router(switch.router, prefix="/api")
 
 app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 

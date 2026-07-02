@@ -135,6 +135,44 @@ class UpgradeReview(Base):
     resolved_at    = Column(DateTime, nullable=True)
 
 
+class SwitchTitle(Base):
+    """
+    Canonical record for a Switch game in the library.
+    One row per game; updates and DLC link back here via SwitchContent.
+    """
+    __tablename__ = "switch_titles"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    game_id      = Column(String(20), unique=True, nullable=False)   # GameTDB ID, e.g. BFLTA
+    title        = Column(String(500), nullable=False)               # canonical EN title
+    developer    = Column(String(200), nullable=True)
+    publisher    = Column(String(200), nullable=True)
+    cover_url    = Column(String(500), nullable=True)                # GameTDB cover art URL
+    cover_local  = Column(String(500), nullable=True)                # cached path on disk
+    library_path = Column(String(1000), nullable=True)               # /media/games/switch/Title/
+    created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class SwitchContent(Base):
+    """
+    A single downloaded item (base game, update, or DLC) belonging to a SwitchTitle.
+    Multiple SwitchContent rows share one SwitchTitle.
+    """
+    __tablename__ = "switch_contents"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    title_id     = Column(Integer, nullable=False)                   # FK → SwitchTitle.id
+    item_name    = Column(String(500), nullable=False, unique=True)  # torrent folder name
+    content_type = Column(String(20), nullable=False)                # base | update | dlc
+    version      = Column(String(50), nullable=True)                 # e.g. 1.0.3 for updates
+    dlc_name     = Column(String(200), nullable=True)                # DLC pack name if applicable
+    filename     = Column(String(500), nullable=True)                # .xci / .nsp file
+    file_size    = Column(Integer, nullable=True)                    # bytes
+    library_path = Column(String(1000), nullable=True)               # full path to the file
+    created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class SyncedItem(Base):
     """Tracks torrent hashes that have already been imported, preventing re-download."""
     __tablename__ = "synced_items"

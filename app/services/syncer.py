@@ -12,7 +12,7 @@ from datetime import datetime
 
 from ..config import settings
 from ..database import SessionLocal
-from ..models import Job, MovieMatch, SyncedItem
+from ..models import Job, MovieMatch, SyncedItem, SwitchContent, SwitchTitle
 from . import job_manager
 from .job_manager import update_job
 from .sources.rtorrent import RtorrentSource
@@ -131,6 +131,34 @@ def _auto_move_if_matched(item_name: str, category: str, source_path: str) -> bo
             logger.info(
                 f"Auto-move queued: '{item_name}' → '{match.formatted_name}' (job {job.id})"
             )
+            return True
+
+        if category in ("switch-games", "switch games"):
+            content = (
+                db.query(SwitchContent)
+                .filter(SwitchContent.item_name == item_name)
+                .first()
+            )
+            if not content:
+                return False
+            title_rec = db.query(SwitchTitle).filter(SwitchTitle.id == content.title_id).first()
+            if not title_rec:
+                return False
+            dest_dir = os.path.join(settings.media_dir, "games", "switch", title_rec.title)
+            job = Job(
+                type="move",
+                category=category,
+                item_name=item_name,
+                source_path=source_path,
+                status="pending",
+                progress=0,
+            )
+            db.add(job)
+            db.commit()
+            db.refresh(job)
+            job_manager.submit_switch_move(job.id, source_path,
+                                           title_rec.id, content.id, dest_dir)
+            logger.info(f"Auto switch-move queued: '{item_name}' → '{title_rec.title}' (job {job.id})")
             return True
 
         if category == "music":
