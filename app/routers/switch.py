@@ -278,13 +278,23 @@ def save_match(req: MatchRequest, db: Session = Depends(_db)):
         db.add(title_rec)
         db.flush()
     else:
-        # Patch any newly known identifiers onto the existing record
+        # Patch any newly known identifiers and metadata onto the existing record
         if nintendo_id and not title_rec.nintendo_id:
             title_rec.nintendo_id = nintendo_id
         if igdb_id and not title_rec.igdb_id:
             title_rec.igdb_id = igdb_id
         if game_id and not title_rec.game_id:
             title_rec.game_id = game_id
+        if req.developer and not title_rec.developer:
+            title_rec.developer = req.developer
+        if req.publisher and not title_rec.publisher:
+            title_rec.publisher = req.publisher
+        if req.cover_url and not title_rec.cover_url:
+            title_rec.cover_url = req.cover_url
+            key = game_id or (f"igdb{igdb_id}" if igdb_id else "cover")
+            cover_local = _cache_cover(key, req.cover_url)
+            if cover_local:
+                title_rec.cover_local = cover_local
 
     # Find primary game file in the incoming folder
     folder = os.path.join(settings.incoming_dir, req.category, req.item_name)
