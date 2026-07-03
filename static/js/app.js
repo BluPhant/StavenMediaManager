@@ -2775,6 +2775,8 @@ const AboutPage = {
       iptorrents: { label: 'IPTorrents',  icon: 'bi-database',       color: '#20c997' },
       tmdb:       { label: 'TMDB',        icon: 'bi-film',           color: '#01b4e4' },
       btn:        { label: 'BTN',         icon: 'bi-broadcast',      color: '#a78bfa' },
+      igdb:       { label: 'IGDB',        icon: 'bi-joystick',       color: '#9147ff' },
+      discogs:    { label: 'Discogs',     icon: 'bi-music-note-beamed', color: '#333333' },
     };
 
     const cards = Object.entries(SERVICE_META).map(([key, meta]) => {
@@ -2808,12 +2810,69 @@ const AboutPage = {
         </div>`;
     }).join('');
 
+    // ── Tech stack ────────────────────────────────────────────────────────────
+    const STACK = [
+      { group: 'Server',
+        items: [
+          { name: 'FastAPI',        desc: 'Python web framework & API layer' },
+          { name: 'Uvicorn',        desc: 'ASGI server (standard extras)' },
+          { name: 'SQLAlchemy',     desc: 'ORM + SQLite database' },
+          { name: 'Pydantic',       desc: 'Settings + request validation' },
+          { name: 'Paramiko',       desc: 'SSH/SFTP for seedbox file transfers' },
+          { name: 'Python stdlib',  desc: 'urllib, socket, ftplib, concurrent.futures — no extra HTTP deps' },
+        ]},
+      { group: 'Frontend',
+        items: [
+          { name: 'Bootstrap 5',       desc: 'UI framework (dark theme)' },
+          { name: 'Bootstrap Icons',   desc: 'Icon set' },
+          { name: 'Vanilla JS',        desc: 'No framework — hash-router, fetch API' },
+        ]},
+      { group: 'Integrations',
+        items: [
+          { name: 'Plex',        desc: 'Library refresh after moves' },
+          { name: 'rTorrent',    desc: 'Seedbox torrent client (XML-RPC + FTPS)' },
+          { name: 'IPTorrents',  desc: 'Movie & content search (RSS API)' },
+          { name: 'BTN',         desc: 'TV torrent search (JSON-RPC API)' },
+          { name: 'TMDB',        desc: 'Movie metadata & poster art' },
+          { name: 'Discogs',     desc: 'Music release metadata' },
+          { name: 'IGDB',        desc: 'Switch game metadata, genres, player count' },
+          { name: 'GameTDB',     desc: 'Switch game IDs and cover art (web scrape)' },
+          { name: 'nswdb',       desc: 'Nintendo Switch scene release database' },
+          { name: 'Awoo / Tinfoil NET', desc: 'Network install protocol (TCP 2000) for Switch' },
+        ]},
+      { group: 'Infrastructure',
+        items: [
+          { name: 'Docker',           desc: 'Containerised deployment on Unraid' },
+          { name: 'GitHub Actions',   desc: 'CI: build, push image to GHCR on main' },
+          { name: 'SQLite',           desc: 'Embedded database — no separate DB service needed' },
+        ]},
+    ];
+
+    const stackSections = STACK.map(section => {
+      const rows = section.items.map(it => `
+        <tr>
+          <td class="text-nowrap pe-3" style="width:1%;font-size:.8rem"><span class="fw-semibold">${esc(it.name)}</span></td>
+          <td class="text-secondary" style="font-size:.78rem">${esc(it.desc)}</td>
+        </tr>`).join('');
+      return `
+        <div class="mb-3">
+          <div class="text-secondary text-uppercase mb-1" style="font-size:.68rem;letter-spacing:.07em">${esc(section.group)}</div>
+          <div class="card border-secondary">
+            <table class="table table-dark table-sm mb-0" style="border-color:transparent">
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>`;
+    }).join('');
+
     return `
       ${versionCard}
       <h6 class="text-secondary text-uppercase mb-2" style="font-size:.75rem;letter-spacing:.06em">Connections</h6>
-      <div class="d-grid gap-2" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));display:grid">
+      <div class="d-grid gap-2 mb-4" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">
         ${cards}
-      </div>`;
+      </div>
+      <h6 class="text-secondary text-uppercase mb-2" style="font-size:.75rem;letter-spacing:.06em">Stack</h6>
+      ${stackSections}`;
   },
 };
 

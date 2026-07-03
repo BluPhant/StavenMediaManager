@@ -94,6 +94,38 @@ def _check_btn() -> dict:
         return {"ok": False, "configured": True, "detail": str(exc)}
 
 
+def _check_igdb() -> dict:
+    if not (settings.igdb_client_id and settings.igdb_client_secret):
+        return {"ok": False, "configured": False, "detail": "Not configured"}
+    try:
+        from ..services.igdb import _get_token
+        t0 = time.monotonic()
+        _get_token(settings.igdb_client_id, settings.igdb_client_secret)
+        ms = int((time.monotonic() - t0) * 1000)
+        return {"ok": True, "configured": True, "detail": "Token valid", "ms": ms}
+    except Exception as exc:
+        return {"ok": False, "configured": True, "detail": str(exc)}
+
+
+def _check_discogs() -> dict:
+    from ..services.discogs import DiscogsClient
+    client = DiscogsClient()
+    if not client.is_configured():
+        return {"ok": False, "configured": False, "detail": "Not configured"}
+    try:
+        url = "https://api.discogs.com/database/search?q=test&type=release&per_page=1"
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Discogs token={settings.discogs_token}",
+            "User-Agent": "StavenMediaManager/1.0",
+        })
+        t0 = time.monotonic()
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            ms = int((time.monotonic() - t0) * 1000)
+        return {"ok": True, "configured": True, "detail": "Token valid", "ms": ms}
+    except Exception as exc:
+        return {"ok": False, "configured": True, "detail": str(exc)}
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 _CHECKS = {
@@ -102,6 +134,8 @@ _CHECKS = {
     "iptorrents": _check_ipt,
     "tmdb":       _check_tmdb,
     "btn":        _check_btn,
+    "igdb":       _check_igdb,
+    "discogs":    _check_discogs,
 }
 
 
