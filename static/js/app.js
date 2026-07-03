@@ -149,17 +149,11 @@ const Views = {
     const heroHtml = `
       <div class="card border-secondary mb-3">
         <div class="card-body p-3">
-          <div class="text-secondary small mb-2 d-flex align-items-center gap-2">
-            <i class="bi bi-film text-info"></i>Find a movie
-          </div>
-          <div class="d-flex gap-2">
-            <input id="home-movie-search" type="text" class="form-control"
-                   placeholder="Title, IMDB ID, or year…"
-                   onkeydown="if(event.key==='Enter') MovieDiscover.searchFor(this.value.trim())">
-            <button class="btn btn-info text-nowrap"
-                    onclick="MovieDiscover.searchFor(document.getElementById('home-movie-search').value.trim())">
-              <i class="bi bi-search me-1"></i>Search
-            </button>
+          <div class="text-secondary small mb-2">Find…</div>
+          <div class="d-flex gap-2 flex-wrap">
+            <a href="#/find/movie"  class="btn btn-outline-info     text-nowrap"><i class="bi bi-film me-2"></i>a movie</a>
+            <a href="#/find/switch" class="btn btn-outline-success  text-nowrap"><i class="bi bi-joystick me-2"></i>a Switch game</a>
+            <a href="#/find/album"  class="btn btn-outline-danger   text-nowrap"><i class="bi bi-music-note-beamed me-2"></i>an album</a>
           </div>
           ${chipHtml}
         </div>
@@ -3287,6 +3281,198 @@ const SwitchLibrary = {
   },
 };
 
+// ─────────────────────────────────────────────
+// Find — unified media search hub
+// ─────────────────────────────────────────────
+const FindPage = {
+  _type: 'movie',
+
+  async render(type = 'movie') {
+    this._type = type;
+    Views._setApp(`
+      <div class="d-flex align-items-center gap-2 mb-3">
+        <i class="bi bi-search fs-5 text-secondary"></i>
+        <h5 class="mb-0">Find</h5>
+      </div>
+      <div class="d-flex gap-0" style="min-height:60vh">
+        <div class="flex-shrink-0 pe-3 me-3 border-end border-secondary" style="width:160px">
+          ${this._rail()}
+        </div>
+        <div class="flex-grow-1" id="find-panel"></div>
+      </div>`);
+    this._renderPanel();
+  },
+
+  _rail() {
+    const opts = [
+      { key: 'movie',  icon: 'bi-film',              color: 'text-info',    label: 'a movie' },
+      { key: 'switch', icon: 'bi-joystick',           color: 'text-success', label: 'a Switch game' },
+      { key: 'album',  icon: 'bi-music-note-beamed',  color: 'text-danger',  label: 'an album' },
+    ];
+    return opts.map(o => {
+      const active = this._type === o.key;
+      return `
+        <a href="#/find/${o.key}"
+           class="d-flex align-items-center gap-2 py-2 px-2 rounded mb-1 text-decoration-none ${active ? 'bg-secondary bg-opacity-25' : ''}"
+           style="color:inherit">
+          <i class="bi ${o.icon} ${o.color}" style="font-size:1rem;flex-shrink:0"></i>
+          <span class="${active ? 'fw-semibold' : 'text-secondary'}" style="font-size:.88rem">${o.label}</span>
+        </a>`;
+    }).join('');
+  },
+
+  _renderPanel() {
+    const panel = document.getElementById('find-panel');
+    if (!panel) return;
+    if (this._type === 'movie')  { this._moviePanel(panel); return; }
+    if (this._type === 'switch') { this._switchPanel(panel); return; }
+    if (this._type === 'album')  { this._albumPanel(panel); return; }
+  },
+
+  // ── Movie ────────────────────────────────────────────────────────────────────
+  _moviePanel(panel) {
+    panel.innerHTML = `
+      <div class="d-flex gap-2 mb-3">
+        <input id="find-movie-q" type="text" class="form-control" placeholder="Title, IMDB ID, or year…"
+               onkeydown="if(event.key==='Enter') FindPage._movieSearch()">
+        <button class="btn btn-info text-nowrap" onclick="FindPage._movieSearch()">
+          <i class="bi bi-search me-1"></i>Search
+        </button>
+      </div>
+      <div id="find-movie-results"></div>`;
+    document.getElementById('find-movie-q').focus();
+  },
+
+  async _movieSearch() {
+    const q = document.getElementById('find-movie-q')?.value?.trim();
+    if (!q) return;
+    const res = document.getElementById('find-movie-results');
+    res.innerHTML = '<div class="spinner-border spinner-border-sm text-secondary"></div>';
+    try {
+      const results = await API.get(`/movies/search?q=${enc(q)}`);
+      if (!results.length) { res.innerHTML = '<div class="text-secondary small">No results.</div>'; return; }
+      res.innerHTML = `<div class="row g-2">${results.map((r, i) => `
+        <div class="col-6 col-md-4 col-lg-3">
+          <div class="card border-secondary match-result-card h-100" onclick="FindPage._goMovie(${r.tmdb_id},${jsStr(r.title)})">
+            ${r.poster_url
+              ? `<img src="${esc(r.poster_url)}" class="card-img-top" style="aspect-ratio:2/3;object-fit:cover" loading="lazy">`
+              : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark" style="aspect-ratio:2/3"><i class="bi bi-film text-secondary fs-2"></i></div>`}
+            <div class="card-body p-2">
+              <div class="small fw-semibold lh-sm">${esc(r.title)}</div>
+              ${r.year ? `<div class="text-secondary" style="font-size:.72rem">${r.year}</div>` : ''}
+            </div>
+          </div>
+        </div>`).join('')}</div>`;
+    } catch (e) {
+      res.innerHTML = `<div class="text-danger small">${esc(e.message)}</div>`;
+    }
+  },
+
+  _goMovie(tmdbId, title) {
+    if (tmdbId) MovieDiscover.goById(tmdbId);
+    else MovieDiscover.searchFor(title);
+  },
+
+  // ── Switch game ──────────────────────────────────────────────────────────────
+  _switchPanel(panel) {
+    panel.innerHTML = `
+      <div class="d-flex gap-2 mb-3">
+        <input id="find-switch-q" type="text" class="form-control" placeholder="Game title…"
+               onkeydown="if(event.key==='Enter') FindPage._switchSearch()">
+        <button class="btn btn-success text-nowrap" onclick="FindPage._switchSearch()">
+          <i class="bi bi-search me-1"></i>Search
+        </button>
+      </div>
+      <div id="find-switch-results"></div>`;
+    document.getElementById('find-switch-q').focus();
+  },
+
+  async _switchSearch() {
+    const q = document.getElementById('find-switch-q')?.value?.trim();
+    if (!q) return;
+    const res = document.getElementById('find-switch-results');
+    res.innerHTML = '<div class="spinner-border spinner-border-sm text-secondary"></div>';
+    try {
+      const data = await API.get(`/switch/search?q=${enc(q)}`);
+      const results = [...(data.igdb || []), ...(data.nswdb || []).filter(n => !(data.igdb||[]).some(i => i.title?.toLowerCase() === n.name?.toLowerCase()))];
+      if (!results.length) { res.innerHTML = '<div class="text-secondary small">No results.</div>'; return; }
+      res.innerHTML = `<div class="row g-2">${results.map(r => {
+        const title = r.title || r.name || '';
+        const year  = r.release_date?.slice(0,4) || r.year || '';
+        const cover = r.cover_url || '';
+        return `
+          <div class="col-6 col-md-4 col-lg-3">
+            <div class="card border-secondary switch-game-card clickable h-100" onclick="Router.go('/switch')">
+              ${cover
+                ? `<img src="${esc(cover)}" class="card-img-top" style="aspect-ratio:3/4;object-fit:cover" loading="lazy">`
+                : `<div class="card-img-top switch-cover-fallback" style="aspect-ratio:3/4"><i class="bi bi-joystick text-secondary fs-2"></i></div>`}
+              <div class="card-body p-2">
+                <div class="small fw-semibold lh-sm">${esc(title)}</div>
+                ${r.publisher ? `<div class="text-secondary" style="font-size:.72rem">${esc(r.publisher)}</div>` : ''}
+                ${year ? `<div class="text-secondary" style="font-size:.68rem">${year}</div>` : ''}
+              </div>
+            </div>
+          </div>`;
+      }).join('')}</div>`;
+    } catch (e) {
+      res.innerHTML = `<div class="text-danger small">${esc(e.message)}</div>`;
+    }
+  },
+
+  // ── Album ────────────────────────────────────────────────────────────────────
+  _albumPanel(panel) {
+    panel.innerHTML = `
+      <div class="d-flex gap-2 mb-3 flex-wrap">
+        <input id="find-album-artist" type="text" class="form-control" placeholder="Artist…"
+               style="flex:1;min-width:120px"
+               onkeydown="if(event.key==='Enter') FindPage._albumSearch()">
+        <input id="find-album-title" type="text" class="form-control" placeholder="Album…"
+               style="flex:2;min-width:160px"
+               onkeydown="if(event.key==='Enter') FindPage._albumSearch()">
+        <button class="btn btn-danger text-nowrap" onclick="FindPage._albumSearch()">
+          <i class="bi bi-search me-1"></i>Search
+        </button>
+      </div>
+      <div id="find-album-results"></div>`;
+    document.getElementById('find-album-title').focus();
+  },
+
+  async _albumSearch() {
+    const artist = document.getElementById('find-album-artist')?.value?.trim() || '';
+    const album  = document.getElementById('find-album-title')?.value?.trim() || '';
+    if (!artist && !album) return;
+    const res = document.getElementById('find-album-results');
+    res.innerHTML = '<div class="spinner-border spinner-border-sm text-secondary"></div>';
+    try {
+      const params = new URLSearchParams();
+      if (artist) params.set('artist', artist);
+      if (album)  params.set('album', album);
+      const results = await API.get(`/music/search?${params}`);
+      if (!results.length) { res.innerHTML = '<div class="text-secondary small">No results.</div>'; return; }
+      res.innerHTML = `<div class="row g-2">${results.map(r => {
+        const thumb = r.cover_image || r.thumb || '';
+        const label = [r.label, r.year].filter(Boolean).join(' · ');
+        return `
+          <div class="col-6 col-md-4 col-lg-3">
+            <div class="card border-secondary match-result-card h-100" style="cursor:default">
+              ${thumb
+                ? `<img src="${esc(thumb)}" class="card-img-top" style="aspect-ratio:1/1;object-fit:cover" loading="lazy">`
+                : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark" style="aspect-ratio:1/1"><i class="bi bi-music-note-beamed text-secondary fs-2"></i></div>`}
+              <div class="card-body p-2">
+                <div class="small fw-semibold lh-sm">${esc(r.title || '')}</div>
+                <div class="text-secondary lh-sm" style="font-size:.72rem">${esc(r.artist || '')}</div>
+                ${label ? `<div class="text-secondary" style="font-size:.68rem">${esc(label)}</div>` : ''}
+                ${(r.genres||[]).length ? `<div class="mt-1">${r.genres.slice(0,2).map(g=>`<span class="badge bg-dark border border-secondary me-1" style="font-size:.6rem">${esc(g)}</span>`).join('')}</div>` : ''}
+              </div>
+            </div>
+          </div>`;
+      }).join('')}</div>`;
+    } catch (e) {
+      res.innerHTML = `<div class="text-danger small">${esc(e.message)}</div>`;
+    }
+  },
+};
+
 const Router = {
   async route() {
     const hash = (location.hash || '#/').slice(1);
@@ -3300,8 +3486,11 @@ const Router = {
     document.getElementById('nav-browse-link')?.classList.toggle('text-info', parts[0] === 'browse');
     document.getElementById('nav-about-link')?.classList.toggle('text-info', parts[0] === 'about');
     document.getElementById('nav-switch-link')?.classList.toggle('text-success', parts[0] === 'switch');
+    document.getElementById('nav-find-link')?.classList.toggle('text-info', parts[0] === 'find');
 
-    if (parts[0] === 'about') {
+    if (parts[0] === 'find') {
+      await FindPage.render(parts[1] || 'movie');
+    } else if (parts[0] === 'about') {
       await AboutPage.render();
     } else if (parts[0] === 'browse') {
       await BrowsePage.render();
