@@ -3339,8 +3339,47 @@ const FindPage = {
           <i class="bi bi-search me-1"></i>Search
         </button>
       </div>
-      <div id="find-movie-results"></div>`;
+      <div id="find-movie-results">
+        <div class="text-secondary small mb-2 d-flex align-items-center gap-2">
+          <i class="bi bi-fire text-danger"></i>New on IPT
+        </div>
+        <div id="find-movie-browse" class="row g-2">
+          <div class="col-12"><div class="spinner-border spinner-border-sm text-secondary"></div></div>
+        </div>
+      </div>`;
     document.getElementById('find-movie-q').focus();
+    this._loadMovieBrowse();
+  },
+
+  async _loadMovieBrowse() {
+    const el = document.getElementById('find-movie-browse');
+    if (!el) return;
+    try {
+      const data = await API.get('/iptorrents/browse?limit=6&offset=0');
+      const movies = data.items || [];
+      if (!movies.length) { el.innerHTML = '<div class="col-12 text-secondary small">Nothing loaded.</div>'; return; }
+      el.innerHTML = movies.map(m => {
+        const resLabel = m.best_res
+          ? `<span class="badge ${m.best_res === '2160p' || m.best_res === '4k' ? 'bg-success' : 'bg-secondary'} me-1" style="font-size:.6rem">${esc(m.best_res)}</span>`
+          : '';
+        return `
+          <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+            <div class="card h-100 match-result-card" onclick="${m.tmdb_id ? `FindPage._goMovie(${m.tmdb_id},${jsStr(m.title)})` : ''}"
+                 style="${m.tmdb_id ? 'cursor:pointer' : 'cursor:default'}">
+              ${m.poster_url
+                ? `<img src="${esc(m.poster_url)}" class="card-img-top" style="aspect-ratio:2/3;object-fit:cover" loading="lazy">`
+                : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark" style="aspect-ratio:2/3"><i class="bi bi-film text-secondary fs-2"></i></div>`}
+              <div class="card-body p-2">
+                <div class="small fw-semibold lh-sm">${esc(m.title)}</div>
+                <div class="text-secondary" style="font-size:.72rem">${m.year ?? ''}</div>
+                <div class="mt-1">${resLabel}<span class="text-secondary" style="font-size:.68rem">${m.total_seeds} seeds</span></div>
+              </div>
+            </div>
+          </div>`;
+      }).join('');
+    } catch (_) {
+      if (el) el.innerHTML = '';
+    }
   },
 
   async _movieSearch() {
@@ -3383,8 +3422,58 @@ const FindPage = {
           <i class="bi bi-search me-1"></i>Search
         </button>
       </div>
-      <div id="find-switch-results"></div>`;
+      <div id="find-switch-results">
+        <div class="text-secondary small mb-2 d-flex align-items-center gap-2">
+          <i class="bi bi-fire text-danger"></i>New on IPT
+        </div>
+        <div id="find-switch-browse" class="row g-2">
+          <div class="col-12"><div class="spinner-border spinner-border-sm text-secondary"></div></div>
+        </div>
+      </div>`;
     document.getElementById('find-switch-q').focus();
+    this._loadSwitchBrowse();
+  },
+
+  async _loadSwitchBrowse() {
+    const el = document.getElementById('find-switch-browse');
+    if (!el) return;
+    try {
+      const data = await API.get('/iptorrents/browse-switch?limit=6');
+      const items = data.items || [];
+      if (!items.length) { el.innerHTML = '<div class="col-12 text-secondary small">Nothing loaded.</div>'; return; }
+      el.innerHTML = items.map(g => {
+        const coverSrc = g.cover_url || (g.cover_local ? `/api/switch/cover-image?title=${enc(g.title)}` : null);
+        const year = g.release_date?.slice(0,4) || '';
+        const inLib = g.in_library
+          ? `<span class="badge bg-success" style="font-size:.6rem">In library</span>`
+          : '';
+        return `
+          <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+            <div class="card h-100 switch-game-card clickable" onclick="Router.go('/switch')">
+              ${coverSrc
+                ? `<img src="${coverSrc}" class="card-img-top" style="aspect-ratio:3/4;object-fit:cover" loading="lazy"
+                        onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                   <div class="card-img-top switch-cover-fallback" style="aspect-ratio:3/4;display:none">
+                     <i class="bi bi-joystick text-secondary fs-2"></i>
+                   </div>`
+                : `<div class="card-img-top switch-cover-fallback" style="aspect-ratio:3/4">
+                     <i class="bi bi-joystick text-secondary fs-2"></i>
+                   </div>`}
+              <div class="card-body p-2">
+                <div class="small fw-semibold lh-sm">${esc(g.title)}</div>
+                ${g.publisher ? `<div class="text-secondary" style="font-size:.72rem">${esc(g.publisher)}</div>` : ''}
+                <div class="mt-1 d-flex flex-wrap gap-1 align-items-center">
+                  ${inLib}
+                  ${year ? `<span class="text-secondary" style="font-size:.68rem">${year}</span>` : ''}
+                  <span class="text-secondary" style="font-size:.68rem">${g.seeders} seeds</span>
+                </div>
+              </div>
+            </div>
+          </div>`;
+      }).join('');
+    } catch (_) {
+      if (el) el.innerHTML = '';
+    }
   },
 
   async _switchSearch() {
@@ -3483,7 +3572,6 @@ const Router = {
     // highlight active nav links
     document.getElementById('nav-search-link')?.classList.toggle('text-info', parts[0] === 'search');
     document.getElementById('nav-movies-link')?.classList.toggle('text-info', parts[0] === 'movies');
-    document.getElementById('nav-browse-link')?.classList.toggle('text-info', parts[0] === 'browse');
     document.getElementById('nav-about-link')?.classList.toggle('text-info', parts[0] === 'about');
     document.getElementById('nav-switch-link')?.classList.toggle('text-success', parts[0] === 'switch');
     document.getElementById('nav-find-link')?.classList.toggle('text-info', parts[0] === 'find');
@@ -3492,8 +3580,6 @@ const Router = {
       await FindPage.render(parts[1] || 'movie');
     } else if (parts[0] === 'about') {
       await AboutPage.render();
-    } else if (parts[0] === 'browse') {
-      await BrowsePage.render();
     } else if (parts[0] === 'switch') {
       await SwitchLibrary.render();
     } else if (!parts.length || (parts[0] !== 'category' && parts[0] !== 'search' && parts[0] !== 'movies')) {

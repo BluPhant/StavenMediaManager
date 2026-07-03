@@ -4,6 +4,7 @@ IPTorrents API — search, browse, and grab torrents.
 GET  /api/iptorrents/status          — is IPT configured?
 GET  /api/iptorrents/search?q=&cat=  — search via RSS feed
 GET  /api/iptorrents/browse          — recently uploaded movies (TMDB-enriched)
+GET  /api/iptorrents/browse-switch   — recently uploaded Switch games (library-matched)
 POST /api/iptorrents/grab            — fetch .torrent and load into rTorrent
 """
 import logging
@@ -242,6 +243,107 @@ _BROWSE_RES_RANK = {"2160p": 4, "4k": 4, "uhd": 4, "1080p": 2, "720p": 1, "480p"
 def _browse_extract_res(title: str) -> str | None:
     m = _BROWSE_RES_RE.search(title)
     return m.group(1).lower() if m else None
+
+
+# ── Browse Switch (recently uploaded Switch games, library-matched) ───────────
+
+import re as _sw_re
+
+# Strip common Switch release tags and scene suffixes from a torrent title
+_SW_STRIP = _sw_re.compile(
+    r'\s*[\[\(]'
+    r'(?:Switch|NSW|NSP|XCI|NSZ|NCA|eShop|Retail|Digital|DLC|Update|v[\d.]+|'
+    r'[Ee]n[Gg]lish|MULTI\d*|[\d]+[\d.]*p?|NMoS|TENOKE|VENOM|BigBlueBox|'
+    r'TiNYiSO|SiMPLEX|CODEX|PLAZA|RELOADED|FLT|GOG|HI2U|'
+    r'SKIDROW|PROPHET|CPY|EMPRESS|FitGirl|KaOs|DODI|iGG|ElAmigos|'
+    r'[A-Z0-9]{3,8})\s*[\]\)]',
+    _sw_re.IGNORECASE,
+)
+_SW_DASH_GROUP = _sw_re.compile(r'\s*-\s*[A-Z0-9]{3,12}\s*$')
+_SW_VERSION    = _sw_re.compile(r'\s+v[\d.]+\s*$', _sw_re.IGNORECASE)
+
+
+def _parse_switch_title(raw: str) -> str:
+    t = raw
+    t = _SW_STRIP.sub('', t)
+    t = _SW_VERSION.sub('', t)
+    t = _SW_DASH_GROUP.sub('', t)
+    return t.strip(' .-_')
+
+
+_sw_browse_cache: list | None = None
+_sw_browse_cache_at: float = 0.0
+_SW_BROWSE_TTL = 300.0
+
+
+@router.get("/browse-switch")
+def browse_switch(limit: int = 8, db: Session = Depends(get_db)):
+    """
+    Recently uploaded Switch games from IPT category 47, matched against
+    the local Switch library for cover art. Cached for 5 minutes.
+    """
+    global _sw_browse_cache, _sw_browse_cache_at
+
+    now = time.monotonic()
+    if _sw_browse_cache is not None and (now - _sw_browse_cache_at) < _SW_BROWSE_TTL:
+        return {"items": _sw_browse_cache[:limit]}
+
+    if not _ipt.is_configured():
+        raise HTTPException(status_code=400, detail="IPTorrents not configured.")
+
+    try:
+        raw = _ipt.search(query="", category="switch", limit=50)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # Deduplicate by cleaned title
+    seen: dict[str, dict] = {}
+    for r in raw:
+        title = _parse_switch_title(r.title)
+        if not title:
+            continue
+        key = title.lower()
+        if key not in seen:
+            seen[key] = {"title": title, "seeders": r.seeders, "torrent_url": r.torrent_url}
+        else:
+            seen[key]["seeders"] = max(seen[key]["seeders"], r.seeders)
+
+    # Match against local switch_titles for cover art / metadata
+    from ..models import SwitchTitle
+    from sqlalchemy import func as _func
+
+    all_db_titles = db.query(SwitchTitle).all()
+    db_by_lower = {t.title.lower(): t for t in all_db_titles}
+
+    def _best_match(title: str):
+        key = title.lower()
+        if key in db_by_lower:
+            return db_by_lower[key]
+        # Partial match: any DB title that starts with or contains the key
+        for k, t in db_by_lower.items():
+            if k.startswith(key[:min(len(key), 12)]) or key[:min(len(key), 12)] in k:
+                return t
+        return None
+
+    result = []
+    for entry in seen.values():
+        match = _best_match(entry["title"])
+        result.append({
+            "title":       match.title if match else entry["title"],
+            "cover_url":   match.cover_url if match else None,
+            "cover_local": match.cover_local if match else None,
+            "publisher":   match.publisher if match else None,
+            "genres":      match.genres if match else None,
+            "release_date": match.release_date if match else None,
+            "in_library":  match is not None,
+            "seeders":     entry["seeders"],
+            "torrent_url": entry["torrent_url"],
+        })
+
+    _sw_browse_cache = result
+    _sw_browse_cache_at = now
+    logger.info(f"IPT browse-switch: {len(result)} unique titles from {len(raw)} releases")
+    return {"items": result[:limit]}
 
 
 # ── Grab ──────────────────────────────────────────────────────────────────────

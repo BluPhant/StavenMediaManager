@@ -32,6 +32,7 @@ CATEGORY_IDS: dict[str, list[int]] = {
     "music":      [22, 80, 31, 46, 56, 97],
     "audiobooks": [16],
     "games":      [7, 8, 42, 43, 57, 59, 60, 64],
+    "switch":     [47],
     "ebooks":     [55],
     "software":   [33, 52],
 }
