@@ -729,16 +729,31 @@ def install_to_switch(req: InstallRequest, db: Session = Depends(_db)):
             SwitchContent.title_id == req.title_id
         ).all()
 
-    # Build HTTP URLs the Switch will use to fetch each file
-    host_ip = settings.switch_host_ip or "172.16.1.40"
-    roms = os.path.normpath(_roms_dir())
+    # Build HTTP URLs the Switch will use to fetch each file.
+    # Use the external host:port the Switch can actually reach (not container-internal port).
+    host_ip   = settings.switch_host_ip or "172.16.1.40"
+    host_port = settings.switch_host_port  # e.g. 8088 when Docker maps host:8088→container:8080
+    roms      = os.path.normpath(_roms_dir())
     file_urls: list[str] = []
-    for c in contents:
-        fpath = c.library_path or ""
-        if fpath and os.path.isfile(fpath):
+
+    def _add_file(fpath: str) -> None:
+        fpath = os.path.normpath(fpath)
+        if os.path.isfile(fpath):
             rel = os.path.relpath(fpath, roms).replace("\\", "/")
-            url = f"{host_ip}:8080/api/switch/file/{urllib.parse.quote(rel)}"
+            url = f"{host_ip}:{host_port}/api/switch/file/{urllib.parse.quote(rel, safe='/')}"
             file_urls.append(url)
+
+    # Primary: file paths stored on SwitchContent records
+    for c in contents:
+        if c.library_path:
+            _add_file(c.library_path)
+
+    # Fallback: scan the title's library folder directly (covers scan-imported games
+    # that have no SwitchContent records, or content records with missing library_path)
+    if not file_urls and title.library_path and os.path.isdir(title.library_path):
+        for fname in sorted(os.listdir(title.library_path)):
+            if os.path.splitext(fname)[1].lower() in {".nsp", ".xci", ".nsz"}:
+                _add_file(os.path.join(title.library_path, fname))
 
     if not file_urls:
         raise HTTPException(status_code=400, detail="No game files found on disk for this title")
