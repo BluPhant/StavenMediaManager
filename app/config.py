@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     igdb_client_id: str = ""
     igdb_client_secret: str = ""
 
+    # ── Switch install (optional) — IP this server advertises to Switches ────
+    # When pushing files to a Switch via Awoo, game files are served over HTTP.
+    # SWITCH_HOST_IP must be the IP the Switch can reach this server at.
+    switch_host_ip: str = ""
+
     # ── Build info (injected by Docker ARG→ENV at image build time) ───────────
     app_version:    str = "dev"
     app_revision:   str = ""

@@ -2938,6 +2938,8 @@ const BrowsePage = {
 // ─────────────────────────────────────────────
 const SwitchLibrary = {
   _importing: false,
+  _targets: [],
+  _scanData: null,
 
   async render() {
     Views._setApp(`
@@ -2959,14 +2961,19 @@ const SwitchLibrary = {
   },
 
   async _load() {
-    let data;
+    let data, targets;
     try {
-      data = await API.get('/switch/scan');
+      [data, targets] = await Promise.all([
+        API.get('/switch/scan'),
+        API.get('/switch/targets').catch(() => []),
+      ]);
     } catch (e) {
       document.getElementById('switch-lib-body').innerHTML =
         `<div class="alert alert-danger">${esc(e.message)}</div>`;
       return;
     }
+    this._scanData = data;
+    this._targets  = targets;
 
     const countEl = document.getElementById('switch-lib-count');
     if (countEl) countEl.textContent =
@@ -2977,66 +2984,89 @@ const SwitchLibrary = {
     const unmatched = data.found.filter(g => !g.matched);
 
     let html = '';
-
     if (matched.length) {
       html += `<div class="row g-3 mb-4">${matched.map(g => this._card(g)).join('')}</div>`;
     }
-
     if (unmatched.length) {
       html += `
-        <div class="d-flex align-items-center gap-2 mb-2">
+        <div class="d-flex align-items-center gap-2 mb-2 mt-2">
           <span class="text-warning small fw-semibold text-uppercase" style="letter-spacing:.06em">
             <i class="bi bi-exclamation-triangle me-1"></i>Unmatched (${unmatched.length})
           </span>
-          <span class="text-secondary small">— no DB record yet, click Scan &amp; Import to create them</span>
+          <span class="text-secondary small">— click Scan &amp; Import to create DB records</span>
         </div>
         <div class="row g-3">${unmatched.map(g => this._card(g)).join('')}</div>`;
     }
-
     if (!data.total) {
       html = `<div class="text-center py-5 text-secondary">
         <i class="bi bi-joystick fs-1 d-block mb-2"></i>
         No folders found in games/switch/ROMS
       </div>`;
     }
-
     document.getElementById('switch-lib-body').innerHTML = html;
   },
 
+  _coverSrc(g) {
+    if (g.cover_url) return esc(g.cover_url);
+    if (g.has_cover || g.cover_local) {
+      const id = g.title_id ? `&id=${g.title_id}` : '';
+      return `/api/switch/cover-image?title=${enc(g.title)}${id}`;
+    }
+    return null;
+  },
+
   _card(g) {
-    const coverSrc = g.cover_url
-      ? esc(g.cover_url)
-      : (g.has_cover || g.cover_local)
-        ? `/api/switch/cover-image?id=${g.title_id || ''}&title=${enc(g.title)}`
-        : null;
-
+    const coverSrc = this._coverSrc(g);
     const imgHtml = coverSrc
-      ? `<img src="${coverSrc}" class="card-img-top" alt=""
+      ? `<img src="${coverSrc}" class="card-img-top switch-cover" alt=""
               style="aspect-ratio:3/4;object-fit:cover" loading="lazy"
-              onerror="this.parentElement.querySelector('.cover-fallback').style.display='flex';this.style.display='none'">
-         <div class="cover-fallback card-img-top d-none align-items-center justify-content-center bg-dark"
-              style="aspect-ratio:3/4"><i class="bi bi-joystick text-secondary" style="font-size:2.5rem"></i></div>`
-      : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark"
-              style="aspect-ratio:3/4"><i class="bi bi-joystick text-secondary" style="font-size:2.5rem"></i></div>`;
+              onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+         <div class="card-img-top switch-cover-fallback" style="aspect-ratio:3/4;display:none">
+           <i class="bi bi-joystick text-secondary" style="font-size:2.5rem"></i>
+         </div>`
+      : `<div class="card-img-top switch-cover-fallback" style="aspect-ratio:3/4">
+           <i class="bi bi-joystick text-secondary" style="font-size:2.5rem"></i>
+         </div>`;
 
-    const pubLine = [g.publisher, g.developer].filter(Boolean).join(' / ');
-    const statusBadge = g.matched
-      ? ''
-      : `<span class="badge bg-warning text-dark" style="font-size:.6rem">unmatched</span>`;
+    const genreTags = g.genres
+      ? g.genres.split(',').slice(0, 2).map(x =>
+          `<span class="badge bg-dark border border-secondary" style="font-size:.6rem">${esc(x.trim())}</span>`
+        ).join('')
+      : '';
 
-    const fileBadge = g.file_count
-      ? `<span class="text-secondary" style="font-size:.68rem">${g.file_count} file${g.file_count !== 1 ? 's' : ''}</span>`
+    const playersBadge = g.num_players
+      ? `<span class="badge bg-dark border border-secondary" style="font-size:.6rem">
+           <i class="bi bi-people-fill me-1"></i>${esc(g.num_players)}
+         </span>`
+      : '';
+
+    const year = g.release_date ? g.release_date.slice(0, 4) : '';
+
+    const installBtn = g.matched && this._targets.length
+      ? `<button class="btn btn-success btn-sm w-100 mt-2" style="font-size:.75rem"
+                 onclick="event.stopPropagation();SwitchLibrary.install(${g.title_id})">
+           <i class="bi bi-send-fill me-1"></i>Install
+         </button>`
+      : '';
+
+    const unmatchedBadge = !g.matched
+      ? `<span class="badge bg-warning text-dark" style="font-size:.6rem">unmatched</span>`
       : '';
 
     return `
       <div class="col-6 col-md-4 col-lg-3 col-xl-2">
-        <div class="card h-100 match-result-card" style="cursor:${g.matched ? 'pointer' : 'default'}"
+        <div class="card h-100 switch-game-card${g.matched ? ' clickable' : ''}"
              ${g.matched ? `onclick="SwitchLibrary.showDetail(${g.title_id})"` : ''}>
           ${imgHtml}
-          <div class="card-body p-2">
-            <div class="small fw-semibold lh-sm">${esc(g.title)}</div>
-            ${pubLine ? `<div class="text-secondary lh-sm" style="font-size:.72rem">${esc(pubLine)}</div>` : ''}
-            <div class="mt-1 d-flex align-items-center gap-1 flex-wrap">${statusBadge}${fileBadge}</div>
+          <div class="card-body p-2 d-flex flex-column">
+            <div class="small fw-semibold lh-sm mb-1">${esc(g.title)}</div>
+            ${g.publisher ? `<div class="text-secondary lh-sm mb-1" style="font-size:.7rem">${esc(g.publisher)}</div>` : ''}
+            <div class="d-flex flex-wrap gap-1 mb-1">
+              ${genreTags}${playersBadge}${unmatchedBadge}
+              ${year ? `<span class="text-secondary" style="font-size:.65rem">${esc(year)}</span>` : ''}
+            </div>
+            ${g.description ? `<div class="text-secondary switch-desc mt-auto" style="font-size:.68rem;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(g.description)}</div>` : ''}
+            ${installBtn}
           </div>
         </div>
       </div>`;
@@ -3047,19 +3077,68 @@ const SwitchLibrary = {
     this._importing = true;
     const btn = document.getElementById('switch-import-btn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Importing…'; }
-
     try {
       const result = await API.post('/switch/scan-import', {});
       toast(`Imported ${result.imported} game${result.imported !== 1 ? 's' : ''}, ${result.skipped} already matched.`, 'success');
-      if (result.errors?.length) {
-        result.errors.forEach(e => toast(`${e.folder}: ${e.error}`, 'warning'));
-      }
+      if (result.errors?.length) result.errors.forEach(e => toast(`${e.folder}: ${e.error}`, 'warning'));
       await this._load();
     } catch (e) {
       toast(`Import failed: ${e.message}`, 'danger');
     } finally {
       this._importing = false;
       if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-cloud-download me-1"></i>Scan &amp; Import'; }
+    }
+  },
+
+  async install(titleId) {
+    if (!this._targets.length) { toast('No Switch targets configured', 'warning'); return; }
+
+    // Single target: install immediately. Multiple targets: show picker.
+    if (this._targets.length === 1) {
+      await this._doInstall(titleId, this._targets[0]);
+      return;
+    }
+
+    // Picker modal for multiple targets
+    const opts = this._targets.map(t =>
+      `<button class="btn btn-outline-success w-100 mb-2 text-start"
+               onclick="SwitchLibrary._pickTarget(${titleId},${t.id})">
+         <i class="bi bi-joystick me-2"></i>${esc(t.name)}
+         <span class="text-secondary small ms-2">${esc(t.ip_address)}</span>
+       </button>`
+    ).join('');
+    const html = `
+      <div class="modal fade" id="switch-target-modal" tabindex="-1">
+        <div class="modal-dialog modal-sm">
+          <div class="modal-content bg-dark border-secondary">
+            <div class="modal-header border-secondary py-2">
+              <h6 class="modal-title mb-0"><i class="bi bi-joystick me-2 text-success"></i>Send to…</h6>
+              <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">${opts}</div>
+          </div>
+        </div>
+      </div>`;
+    document.getElementById('app').insertAdjacentHTML('beforeend', html);
+    const modal = new bootstrap.Modal(document.getElementById('switch-target-modal'));
+    document.getElementById('switch-target-modal').addEventListener('hidden.bs.modal', e => e.target.remove());
+    modal.show();
+  },
+
+  async _pickTarget(titleId, targetId) {
+    const modal = bootstrap.Modal.getInstance(document.getElementById('switch-target-modal'));
+    if (modal) modal.hide();
+    const target = this._targets.find(t => t.id === targetId);
+    if (target) await this._doInstall(titleId, target);
+  },
+
+  async _doInstall(titleId, target) {
+    toast(`Sending to ${target.name}… make sure Awoo is open in Network Install mode.`, 'info');
+    try {
+      const r = await API.post('/switch/install', { title_id: titleId, target_id: target.id });
+      toast(`Install started on ${target.name} — ${r.files_sent} file(s) queued.`, 'success');
+    } catch (e) {
+      toast(`Install failed: ${e.message}`, 'danger');
     }
   },
 
@@ -3073,62 +3152,70 @@ const SwitchLibrary = {
 
     const coverSrc = t.cover_url
       ? esc(t.cover_url)
-      : t.cover_local
-        ? `/api/switch/cover-image?id=${t.id}`
-        : null;
+      : t.cover_local ? `/api/switch/cover-image?id=${t.id}` : null;
 
-    const contents = (t.contents || []);
+    const genreTags = t.genres
+      ? t.genres.split(',').map(x =>
+          `<span class="badge bg-dark border border-secondary me-1" style="font-size:.7rem">${esc(x.trim())}</span>`
+        ).join('')
+      : '';
+
+    const contents = t.contents || [];
     const contentRows = contents.map(c => {
-      const lbl = { base: 'Base Game', update: 'Update', dlc: 'DLC' }[c.content_type] || c.content_type;
+      const lbl   = { base: 'Base Game', update: 'Update', dlc: 'DLC' }[c.content_type] || c.content_type;
       const fname = c.filename || (c.library_path || '').split('/').pop();
       return `
         <tr>
           <td><span class="badge bg-secondary">${esc(lbl)}</span></td>
-          <td class="small text-truncate" style="max-width:240px" title="${esc(c.library_path||'')}">
-            ${esc(fname)}
-          </td>
+          <td class="small text-truncate" style="max-width:220px" title="${esc(c.library_path||'')}">${esc(fname)}</td>
           <td class="text-secondary small text-nowrap">${c.version ? 'v'+esc(c.version) : '—'}</td>
           <td class="text-secondary small text-nowrap">${_humanSize(c.file_size)}</td>
         </tr>`;
     }).join('');
+
+    const installBtn = this._targets.length
+      ? `<button class="btn btn-success"
+                 onclick="SwitchLibrary.install(${t.id});bootstrap.Modal.getInstance(document.getElementById('switch-detail-modal')).hide()">
+           <i class="bi bi-send-fill me-1"></i>Install to Switch
+         </button>`
+      : '';
 
     const html = `
       <div class="modal fade" id="switch-detail-modal" tabindex="-1">
         <div class="modal-dialog modal-lg">
           <div class="modal-content bg-dark text-white border-secondary">
             <div class="modal-header border-secondary py-2">
-              <h6 class="modal-title mb-0">
-                <i class="bi bi-joystick me-2 text-success"></i>${esc(t.title)}
-              </h6>
+              <h6 class="modal-title mb-0"><i class="bi bi-joystick me-2 text-success"></i>${esc(t.title)}</h6>
               <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
               <div class="d-flex gap-3 align-items-start mb-3">
                 ${coverSrc
                   ? `<img src="${coverSrc}" alt="" class="flex-shrink-0 rounded"
-                          style="width:100px;object-fit:cover">`
+                          style="width:110px;aspect-ratio:3/4;object-fit:cover">`
                   : `<div class="flex-shrink-0 rounded bg-secondary d-flex align-items-center justify-content-center"
-                          style="width:100px;height:133px"><i class="bi bi-joystick text-dark fs-3"></i></div>`}
+                          style="width:110px;height:147px"><i class="bi bi-joystick text-dark fs-3"></i></div>`}
                 <div class="flex-grow-1">
-                  <div class="fw-semibold fs-6">${esc(t.title)}</div>
+                  <div class="fw-semibold fs-6 mb-1">${esc(t.title)}</div>
                   ${t.publisher ? `<div class="text-secondary small">${esc(t.publisher)}</div>` : ''}
                   ${t.developer && t.developer !== t.publisher ? `<div class="text-secondary small">${esc(t.developer)}</div>` : ''}
-                  <div class="mt-2 d-flex flex-wrap gap-1">
-                    ${t.game_id    ? `<code class="small text-success">GameTDB: ${esc(t.game_id)}</code>` : ''}
-                    ${t.igdb_id   ? `<code class="small text-info">IGDB: ${t.igdb_id}</code>` : ''}
-                    ${t.nintendo_id ? `<code class="small text-warning">TitleID: ${esc(t.nintendo_id)}</code>` : ''}
+                  <div class="d-flex flex-wrap gap-1 mt-2">
+                    ${genreTags}
+                    ${t.num_players ? `<span class="badge bg-dark border border-secondary" style="font-size:.7rem"><i class="bi bi-people-fill me-1"></i>${esc(t.num_players)}</span>` : ''}
+                    ${t.release_date ? `<span class="text-secondary small">${esc(t.release_date.slice(0,4))}</span>` : ''}
                   </div>
-                  ${t.library_path ? `<div class="text-secondary mt-2" style="font-size:.72rem">${esc(t.library_path)}</div>` : ''}
+                  ${t.description ? `<p class="text-secondary mt-2 mb-0" style="font-size:.82rem;line-height:1.5">${esc(t.description)}</p>` : ''}
                 </div>
               </div>
               ${contents.length ? `
-                <h6 class="text-secondary text-uppercase small" style="letter-spacing:.06em">Content</h6>
-                <div class="table-responsive">
+                <h6 class="text-secondary text-uppercase small mb-2" style="letter-spacing:.06em">Content in library</h6>
+                <div class="table-responsive mb-3">
                   <table class="table table-dark table-sm align-middle mb-0">
                     <thead class="text-secondary"><tr><th>Type</th><th>File</th><th>Version</th><th>Size</th></tr></thead>
                     <tbody>${contentRows}</tbody>
                   </table>
-                </div>` : '<div class="text-secondary small">No content records in DB.</div>'}
+                </div>` : ''}
+              <div class="d-flex gap-2">${installBtn}</div>
             </div>
           </div>
         </div>

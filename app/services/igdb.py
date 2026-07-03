@@ -63,10 +63,12 @@ def _to_dict(r: dict) -> dict:
     if isinstance(cover, dict) and cover.get("image_id"):
         cover_url = f"https://images.igdb.com/igdb/image/upload/t_cover_big/{cover['image_id']}.jpg"
 
-    year = None
+    release_date = year = None
     ts = r.get("first_release_date")
     if ts:
-        year = datetime.fromtimestamp(ts, tz=timezone.utc).year
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        year = dt.year
+        release_date = dt.strftime("%Y-%m-%d")
 
     publisher = developer = None
     for c in (r.get("involved_companies") or []):
@@ -80,13 +82,35 @@ def _to_dict(r: dict) -> dict:
         if c.get("developer") and not developer:
             developer = cname
 
+    genres = ", ".join(
+        g["name"] for g in (r.get("genres") or []) if isinstance(g, dict) and g.get("name")
+    ) or None
+
+    # Player count: prefer multiplayer_modes max, fall back to game_modes presence
+    num_players = None
+    mm = r.get("multiplayer_modes") or []
+    if mm and isinstance(mm, list):
+        offline_max = max((m.get("offlinemax") or 1 for m in mm if isinstance(m, dict)), default=1)
+        online_max  = max((m.get("onlinemax")  or 0 for m in mm if isinstance(m, dict)), default=0)
+        total_max = max(offline_max, online_max)
+        num_players = "1" if total_max <= 1 else f"1–{total_max}"
+    else:
+        mode_names = [m["name"] for m in (r.get("game_modes") or []) if isinstance(m, dict) and m.get("name")]
+        has_multi = any("multi" in n.lower() or "co-op" in n.lower() for n in mode_names)
+        if mode_names:
+            num_players = "1+" if has_multi else "1"
+
     return {
-        "igdb_id":   r["id"],
-        "title":     r.get("name", ""),
-        "cover_url": cover_url,
-        "year":      year,
-        "publisher": publisher,
-        "developer": developer,
+        "igdb_id":      r["id"],
+        "title":        r.get("name", ""),
+        "cover_url":    cover_url,
+        "year":         year,
+        "release_date": release_date,
+        "publisher":    publisher,
+        "developer":    developer,
+        "description":  r.get("summary") or None,
+        "genres":       genres,
+        "num_players":  num_players,
     }
 
 
@@ -94,7 +118,9 @@ def search_games(query: str, client_id: str, client_secret: str, limit: int = 10
     body = (
         f'search "{query}"; '
         f'fields id,name,cover.image_id,first_release_date,'
-        f'involved_companies.company.name,involved_companies.publisher,involved_companies.developer; '
+        f'involved_companies.company.name,involved_companies.publisher,involved_companies.developer,'
+        f'summary,genres.name,game_modes.name,'
+        f'multiplayer_modes.offlinemax,multiplayer_modes.onlinemax; '
         f'where platforms = ({_SWITCH_PLATFORM}); '
         f'limit {limit};'
     )

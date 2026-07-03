@@ -1,5 +1,5 @@
 """
-Switch router — game lookup, title/content library management.
+Switch router — game lookup, title/content library management, and push install.
 
 Endpoints:
   GET  /switch/detect               — auto-detect game ID + nswdb match for an incoming folder
@@ -11,19 +11,30 @@ Endpoints:
   POST /switch/match                — confirm match: upsert SwitchTitle + SwitchContent
   POST /switch/move                 — submit move job
   DELETE /switch/content            — remove a SwitchContent record
+  GET  /switch/scan                 — list ROMS folder vs DB
+  POST /switch/scan-import          — import unmatched ROMS folders into DB
+  GET  /switch/cover-image          — serve local cover art
+  GET  /switch/file/{path}          — serve game file (range-request aware, for Awoo HTTP fetch)
+  GET  /switch/targets              — list Switch console targets
+  POST /switch/targets              — add a Switch target
+  DELETE /switch/targets/{id}       — remove a target
+  POST /switch/install              — push files to an Awoo console (Tinfoil NET protocol)
 """
 import logging
 import os
 import re
+import socket
+import urllib.parse
 import urllib.request
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import SessionLocal
-from ..models import SwitchContent, SwitchTitle
+from ..models import SwitchContent, SwitchTarget, SwitchTitle
 from ..services import gametdb as tdb
 from ..services import igdb as igdb_svc
 from ..services import nswdb as nswdb_svc
@@ -45,19 +56,23 @@ def _db():
 
 def _title_to_dict(t: SwitchTitle, contents: list[SwitchContent] | None = None) -> dict:
     return {
-        "id":          t.id,
-        "game_id":     t.game_id,
-        "igdb_id":     t.igdb_id,
-        "nintendo_id": t.nintendo_id,
-        "title":       t.title,
-        "developer":   t.developer,
-        "publisher":   t.publisher,
-        "cover_url":   t.cover_url,
-        "cover_local": t.cover_local,
+        "id":           t.id,
+        "game_id":      t.game_id,
+        "igdb_id":      t.igdb_id,
+        "nintendo_id":  t.nintendo_id,
+        "title":        t.title,
+        "developer":    t.developer,
+        "publisher":    t.publisher,
+        "description":  t.description,
+        "genres":       t.genres,
+        "num_players":  t.num_players,
+        "release_date": t.release_date,
+        "cover_url":    t.cover_url,
+        "cover_local":  t.cover_local,
         "library_path": t.library_path,
-        "created_at":  t.created_at,
-        "updated_at":  t.updated_at,
-        "contents":    [_content_to_dict(c) for c in (contents or [])],
+        "created_at":   t.created_at,
+        "updated_at":   t.updated_at,
+        "contents":     [_content_to_dict(c) for c in (contents or [])],
     }
 
 
@@ -443,20 +458,24 @@ def scan_roms(db: Session = Depends(_db)):
         has_cover = os.path.isfile(os.path.join(entry, "cover.jpg"))
 
         found.append({
-            "folder_name": name,
+            "folder_name":  name,
             "library_path": entry,
-            "matched":    rec is not None,
-            "title_id":   rec.id if rec else None,
-            "title":      (rec.title if rec else None) or (meta and meta.get("title")) or name,
-            "cover_url":  rec.cover_url if rec else (meta and meta.get("cover_url")),
-            "cover_local": rec.cover_local if rec else None,
-            "has_cover":  has_cover,
-            "publisher":  rec.publisher if rec else (meta and meta.get("publisher")),
-            "developer":  rec.developer if rec else (meta and meta.get("developer")),
-            "igdb_id":    rec.igdb_id if rec else (meta and meta.get("igdb_id")),
-            "game_id":    rec.game_id if rec else None,
-            "file_count": len(game_files),
-            "game_files": game_files,
+            "matched":      rec is not None,
+            "title_id":     rec.id if rec else None,
+            "title":        (rec.title if rec else None) or (meta and meta.get("title")) or name,
+            "cover_url":    rec.cover_url if rec else (meta and meta.get("cover_url")),
+            "cover_local":  rec.cover_local if rec else None,
+            "has_cover":    has_cover,
+            "publisher":    rec.publisher if rec else (meta and meta.get("publisher")),
+            "developer":    rec.developer if rec else (meta and meta.get("developer")),
+            "description":  rec.description if rec else (meta and meta.get("description")),
+            "genres":       rec.genres if rec else (meta and meta.get("genres")),
+            "num_players":  rec.num_players if rec else (meta and meta.get("num_players")),
+            "release_date": rec.release_date if rec else (meta and meta.get("release_date")),
+            "igdb_id":      rec.igdb_id if rec else (meta and meta.get("igdb_id")),
+            "game_id":      rec.game_id if rec else None,
+            "file_count":   len(game_files),
+            "game_files":   game_files,
         })
 
     matched = sum(1 for f in found if f["matched"])
@@ -507,6 +526,34 @@ def scan_import(db: Session = Depends(_db)):
             if not rec.cover_local and os.path.isfile(cov_path):
                 rec.cover_local = cov_path
                 changed = True
+            # Back-fill IGDB-sourced metadata if missing
+            needs_enrich = not rec.description and settings.igdb_client_id and settings.igdb_client_secret
+            if needs_enrich:
+                search_query = rec.title or name
+                try:
+                    results = igdb_svc.search_games(
+                        search_query, settings.igdb_client_id, settings.igdb_client_secret, limit=1
+                    )
+                    if results:
+                        r = results[0]
+                        if r.get("description") and not rec.description:
+                            rec.description = r["description"]
+                            changed = True
+                        if r.get("genres") and not rec.genres:
+                            rec.genres = r["genres"]
+                            changed = True
+                        if r.get("num_players") and not rec.num_players:
+                            rec.num_players = r["num_players"]
+                            changed = True
+                        if r.get("release_date") and not rec.release_date:
+                            rec.release_date = r["release_date"]
+                            changed = True
+                        if r.get("igdb_id") and not rec.igdb_id:
+                            rec.igdb_id = r["igdb_id"]
+                            changed = True
+                    time.sleep(0.25)
+                except Exception as exc:
+                    logger.warning(f"IGDB enrich failed for {name!r}: {exc}")
             if changed:
                 db.commit()
             skipped += 1
@@ -528,6 +575,11 @@ def scan_import(db: Session = Depends(_db)):
         publisher = meta and meta.get("publisher")
         developer = meta and meta.get("developer")
 
+        description = meta and meta.get("description")
+        genres      = meta and meta.get("genres")
+        num_players = meta and meta.get("num_players")
+        release_date = meta and meta.get("release_date")
+
         # IGDB search if credentials available
         if not igdb_id and settings.igdb_client_id and settings.igdb_client_secret:
             try:
@@ -536,11 +588,15 @@ def scan_import(db: Session = Depends(_db)):
                 )
                 if results:
                     r = results[0]
-                    igdb_id   = r.get("igdb_id") or igdb_id
-                    cover_url = r.get("cover_url") or cover_url
-                    publisher = r.get("publisher") or publisher
-                    developer = r.get("developer") or developer
-                    title_str = r.get("title") or title_str
+                    igdb_id      = r.get("igdb_id") or igdb_id
+                    cover_url    = r.get("cover_url") or cover_url
+                    publisher    = r.get("publisher") or publisher
+                    developer    = r.get("developer") or developer
+                    title_str    = r.get("title") or title_str
+                    description  = r.get("description") or description
+                    genres       = r.get("genres") or genres
+                    num_players  = r.get("num_players") or num_players
+                    release_date = r.get("release_date") or release_date
                 time.sleep(0.25)   # stay well within IGDB rate limit
             except Exception as exc:
                 logger.warning(f"IGDB search failed for {name!r}: {exc}")
@@ -569,6 +625,10 @@ def scan_import(db: Session = Depends(_db)):
                 title        = title_str,
                 developer    = developer,
                 publisher    = publisher,
+                description  = description,
+                genres       = genres,
+                num_players  = num_players,
+                release_date = release_date,
                 cover_url    = cover_url,
                 cover_local  = cover_local,
                 library_path = entry,
@@ -583,6 +643,117 @@ def scan_import(db: Session = Depends(_db)):
             logger.error(f"scan-import failed for {name!r}: {exc}")
 
     return {"imported": imported, "skipped": skipped, "errors": errors}
+
+
+@router.get("/switch/file/{file_path:path}")
+def serve_game_file(file_path: str):
+    """
+    Serve a game file from the ROMS library with range-request support.
+    Called by Awoo/Tinfoil during network install to stream the actual file bytes.
+    """
+    roms = os.path.normpath(_roms_dir())
+    full = os.path.normpath(os.path.join(roms, file_path))
+    # Prevent path traversal
+    if not full.startswith(roms + os.sep) and full != roms:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not os.path.isfile(full):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(full, media_type="application/octet-stream")
+
+
+# ── Switch targets ─────────────────────────────────────────────────────────────
+
+class TargetRequest(BaseModel):
+    name:       str
+    ip_address: str
+    port:       int = 2000
+
+
+@router.get("/switch/targets")
+def list_targets(db: Session = Depends(_db)):
+    return [
+        {"id": t.id, "name": t.name, "ip_address": t.ip_address, "port": t.port}
+        for t in db.query(SwitchTarget).order_by(SwitchTarget.name).all()
+    ]
+
+
+@router.post("/switch/targets", status_code=201)
+def create_target(req: TargetRequest, db: Session = Depends(_db)):
+    t = SwitchTarget(name=req.name, ip_address=req.ip_address, port=req.port)
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return {"id": t.id, "name": t.name, "ip_address": t.ip_address, "port": t.port}
+
+
+@router.delete("/switch/targets/{target_id}")
+def delete_target(target_id: int, db: Session = Depends(_db)):
+    t = db.query(SwitchTarget).filter(SwitchTarget.id == target_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Target not found")
+    db.delete(t)
+    db.commit()
+    return {"deleted": target_id}
+
+
+# ── Push install ───────────────────────────────────────────────────────────────
+
+class InstallRequest(BaseModel):
+    title_id:    int
+    target_id:   int
+    content_ids: list[int] | None = None   # None = send all content for the title
+
+
+@router.post("/switch/install")
+def install_to_switch(req: InstallRequest, db: Session = Depends(_db)):
+    """
+    Push game files to a Switch running Awoo/Tinfoil in Network Install mode.
+    Uses the Tinfoil NET protocol (TCP port 2000): sends file URLs to the Switch,
+    which then fetches each file via HTTP from this server.
+    """
+    target = db.query(SwitchTarget).filter(SwitchTarget.id == req.target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Switch target not found")
+
+    title = db.query(SwitchTitle).filter(SwitchTitle.id == req.title_id).first()
+    if not title:
+        raise HTTPException(status_code=404, detail="Title not found")
+
+    if req.content_ids:
+        contents = db.query(SwitchContent).filter(
+            SwitchContent.id.in_(req.content_ids),
+            SwitchContent.title_id == req.title_id,
+        ).all()
+    else:
+        contents = db.query(SwitchContent).filter(
+            SwitchContent.title_id == req.title_id
+        ).all()
+
+    # Build HTTP URLs the Switch will use to fetch each file
+    host_ip = settings.switch_host_ip or "172.16.1.40"
+    roms = os.path.normpath(_roms_dir())
+    file_urls: list[str] = []
+    for c in contents:
+        fpath = c.library_path or ""
+        if fpath and os.path.isfile(fpath):
+            rel = os.path.relpath(fpath, roms).replace("\\", "/")
+            url = f"{host_ip}:8080/api/switch/file/{urllib.parse.quote(rel)}"
+            file_urls.append(url)
+
+    if not file_urls:
+        raise HTTPException(status_code=400, detail="No game files found on disk for this title")
+
+    try:
+        _send_to_awoo(target.ip_address, target.port, file_urls)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not connect to {target.name} ({target.ip_address}:{target.port}) — "
+                   f"make sure Awoo is open in Network Install mode. Error: {exc}",
+        )
+
+    logger.info(f"Install initiated: {title.title} → {target.name} ({len(file_urls)} file(s))")
+    return {"title": title.title, "target": target.name, "files_sent": len(file_urls)}
 
 
 @router.get("/switch/cover-image")
@@ -634,6 +805,31 @@ def _find_game_file(folder: str) -> tuple[str | None, int | None]:
     except OSError:
         pass
     return best_name, best_size or None
+
+
+def _send_to_awoo(ip: str, port: int, file_urls: list[str]) -> None:
+    """
+    Tinfoil NET / Awoo network install protocol (verified against NS-USBloader source).
+    Connects to Switch on TCP port 2000 and sends the list of file locations.
+    The Switch then fetches each via HTTP to perform the install.
+
+    Wire format:
+      4 bytes  — byte length of payload as big-endian uint32 (Java ByteBuffer default)
+      payload  — newline-separated UTF-8 strings, each "HOST:PORT/path\n"
+    """
+    payload = b""
+    for url in file_urls:
+        payload += url.encode("utf-8") + b"\n"
+
+    header = len(payload).to_bytes(4, "big")
+
+    with socket.create_connection((ip, port), timeout=10) as sock:
+        sock.sendall(header + payload)
+        sock.settimeout(3)
+        try:
+            sock.recv(256)
+        except (socket.timeout, OSError):
+            pass
 
 
 def _cache_cover(key: str, cover_url: str) -> str | None:

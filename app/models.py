@@ -149,11 +149,26 @@ class SwitchTitle(Base):
     title        = Column(String(500), nullable=False)
     developer    = Column(String(200), nullable=True)
     publisher    = Column(String(200), nullable=True)
+    description  = Column(Text, nullable=True)                       # IGDB summary
+    genres       = Column(String(500), nullable=True)                # comma-separated (from IGDB)
+    num_players  = Column(String(50), nullable=True)                 # e.g. "1", "1–4", "1–8"
+    release_date = Column(String(20), nullable=True)                 # ISO date e.g. "2019-01-24"
     cover_url    = Column(String(500), nullable=True)                # cover art URL (GameTDB or IGDB CDN)
     cover_local  = Column(String(500), nullable=True)                # cached .jpg path on disk
-    library_path = Column(String(1000), nullable=True)               # /media/games/switch/Title/
+    library_path = Column(String(1000), nullable=True)               # /media/games/switch/ROMS/Title/
     created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at   = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class SwitchTarget(Base):
+    """A physical Switch console that can receive installs via Awoo network mode."""
+    __tablename__ = "switch_targets"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    name       = Column(String(200), nullable=False)
+    ip_address = Column(String(50), nullable=False)
+    port       = Column(Integer, default=2000, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class SwitchContent(Base):

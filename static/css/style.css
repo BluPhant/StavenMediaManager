@@ -126,3 +126,27 @@ body {
 .match-result-card .card-body {
   background: #1a1a1a;
 }
+
+/* ── Switch library cards ── */
+.switch-game-card {
+  background: #1a1a1a;
+  border: 1px solid #2d2d2d;
+  transition: border-color 0.15s, transform 0.15s;
+  overflow: hidden;
+}
+.switch-game-card.clickable {
+  cursor: pointer;
+}
+.switch-game-card.clickable:hover {
+  border-color: #198754;
+  transform: translateY(-2px);
+}
+.switch-game-card .card-body {
+  background: #1a1a1a;
+}
+.switch-cover-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #111;
+}
