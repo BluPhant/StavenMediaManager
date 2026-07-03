@@ -645,20 +645,24 @@ def scan_import(db: Session = Depends(_db)):
     return {"imported": imported, "skipped": skipped, "errors": errors}
 
 
-@router.get("/switch/file/{file_path:path}")
+@router.api_route("/switch/file/{file_path:path}", methods=["GET", "HEAD"])
 def serve_game_file(file_path: str):
     """
     Serve a game file from the ROMS library with range-request support.
-    Called by Awoo/Tinfoil during network install to stream the actual file bytes.
+    Called by Awoo/Tinfoil during network install — HEAD first (file size),
+    then GET with Range headers to stream the bytes.
     """
     roms = os.path.normpath(_roms_dir())
     full = os.path.normpath(os.path.join(roms, file_path))
-    # Prevent path traversal
     if not full.startswith(roms + os.sep) and full != roms:
         raise HTTPException(status_code=403, detail="Access denied")
     if not os.path.isfile(full):
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(full, media_type="application/octet-stream")
+    return FileResponse(
+        full,
+        media_type="application/octet-stream",
+        headers={"Accept-Ranges": "bytes"},
+    )
 
 
 # ── Switch targets ─────────────────────────────────────────────────────────────
