@@ -357,7 +357,7 @@ def move_to_library(req: MoveRequest, db: Session = Depends(_db)):
     if not os.path.isdir(source_path):
         raise HTTPException(status_code=400, detail="Source folder not found on disk")
 
-    dest_dir = os.path.join(settings.media_dir, "games", "switch", title.title)
+    dest_dir = os.path.join(settings.media_dir, "games", "switch", "ROMS", title.title)
 
     db2 = _SL()
     try:
@@ -386,6 +386,232 @@ def delete_content(item_name: str, db: Session = Depends(_db)):
     db.delete(c)
     db.commit()
     return {"deleted": item_name}
+
+
+# ── Library scan ──────────────────────────────────────────────────────────────
+
+_ROMS_SUBDIR = os.path.join("games", "switch", "ROMS")
+_GAME_EXTS_SET = {".xci", ".nsp", ".nsz"}
+
+
+def _roms_dir() -> str:
+    return os.path.join(settings.media_dir, "games", "switch", "ROMS")
+
+
+@router.get("/switch/scan")
+def scan_roms(db: Session = Depends(_db)):
+    """List every subfolder in games/switch/ROMS and report DB match status."""
+    import json as _json
+
+    roms = _roms_dir()
+    if not os.path.isdir(roms):
+        return {"roms_dir": roms, "found": [], "total": 0, "matched": 0, "unmatched": 0}
+
+    all_titles = db.query(SwitchTitle).all()
+    by_title   = {t.title.lower(): t for t in all_titles}
+    by_path    = {(t.library_path or "").rstrip("/"): t for t in all_titles}
+
+    found = []
+    for name in sorted(os.listdir(roms)):
+        entry = os.path.join(roms, name)
+        if not os.path.isdir(entry):
+            continue
+
+        rec = by_title.get(name.lower()) or by_path.get(entry.rstrip("/"))
+
+        meta = None
+        mpath = os.path.join(entry, "metadata.json")
+        if os.path.isfile(mpath):
+            try:
+                with open(mpath, encoding="utf-8") as f:
+                    meta = _json.load(f)
+            except Exception:
+                pass
+
+        game_files = []
+        try:
+            for fname in os.listdir(entry):
+                if os.path.splitext(fname)[1].lower() in _GAME_EXTS_SET:
+                    try:
+                        sz = os.path.getsize(os.path.join(entry, fname))
+                    except OSError:
+                        sz = 0
+                    game_files.append({"name": fname, "size": sz})
+        except OSError:
+            pass
+
+        has_cover = os.path.isfile(os.path.join(entry, "cover.jpg"))
+
+        found.append({
+            "folder_name": name,
+            "library_path": entry,
+            "matched":    rec is not None,
+            "title_id":   rec.id if rec else None,
+            "title":      (rec.title if rec else None) or (meta and meta.get("title")) or name,
+            "cover_url":  rec.cover_url if rec else (meta and meta.get("cover_url")),
+            "cover_local": rec.cover_local if rec else None,
+            "has_cover":  has_cover,
+            "publisher":  rec.publisher if rec else (meta and meta.get("publisher")),
+            "developer":  rec.developer if rec else (meta and meta.get("developer")),
+            "igdb_id":    rec.igdb_id if rec else (meta and meta.get("igdb_id")),
+            "game_id":    rec.game_id if rec else None,
+            "file_count": len(game_files),
+            "game_files": game_files,
+        })
+
+    matched = sum(1 for f in found if f["matched"])
+    return {
+        "roms_dir": roms,
+        "found": found,
+        "total": len(found),
+        "matched": matched,
+        "unmatched": len(found) - matched,
+    }
+
+
+@router.post("/switch/scan-import")
+def scan_import(db: Session = Depends(_db)):
+    """
+    Walk games/switch/ROMS and create SwitchTitle records for any unmatched folder.
+    Attempts an IGDB search for each new game to populate metadata + cover art.
+    Already-matched titles have their library_path / cover_local back-filled if missing.
+    """
+    import json as _json
+    import shutil as _shutil
+    import time
+
+    roms = _roms_dir()
+    if not os.path.isdir(roms):
+        return {"imported": 0, "skipped": 0, "errors": []}
+
+    all_titles = db.query(SwitchTitle).all()
+    by_title   = {t.title.lower(): t for t in all_titles}
+    by_path    = {(t.library_path or "").rstrip("/"): t for t in all_titles}
+
+    imported, skipped, errors = 0, 0, []
+
+    for name in sorted(os.listdir(roms)):
+        entry = os.path.join(roms, name)
+        if not os.path.isdir(entry):
+            continue
+
+        rec = by_title.get(name.lower()) or by_path.get(entry.rstrip("/"))
+
+        if rec:
+            # Back-fill missing fields on existing record
+            changed = False
+            if not rec.library_path:
+                rec.library_path = entry
+                changed = True
+            cov_path = os.path.join(entry, "cover.jpg")
+            if not rec.cover_local and os.path.isfile(cov_path):
+                rec.cover_local = cov_path
+                changed = True
+            if changed:
+                db.commit()
+            skipped += 1
+            continue
+
+        # --- New game ---
+        meta = None
+        mpath = os.path.join(entry, "metadata.json")
+        if os.path.isfile(mpath):
+            try:
+                with open(mpath, encoding="utf-8") as f:
+                    meta = _json.load(f)
+            except Exception:
+                pass
+
+        title_str = (meta and meta.get("title")) or name
+        igdb_id   = meta and meta.get("igdb_id")
+        cover_url = meta and meta.get("cover_url")
+        publisher = meta and meta.get("publisher")
+        developer = meta and meta.get("developer")
+
+        # IGDB search if credentials available
+        if not igdb_id and settings.igdb_client_id and settings.igdb_client_secret:
+            try:
+                results = igdb_svc.search_games(
+                    name, settings.igdb_client_id, settings.igdb_client_secret, limit=1
+                )
+                if results:
+                    r = results[0]
+                    igdb_id   = r.get("igdb_id") or igdb_id
+                    cover_url = r.get("cover_url") or cover_url
+                    publisher = r.get("publisher") or publisher
+                    developer = r.get("developer") or developer
+                    title_str = r.get("title") or title_str
+                time.sleep(0.25)   # stay well within IGDB rate limit
+            except Exception as exc:
+                logger.warning(f"IGDB search failed for {name!r}: {exc}")
+
+        # Cover art: prefer existing library copy, else download
+        cover_local = None
+        cov_path = os.path.join(entry, "cover.jpg")
+        if os.path.isfile(cov_path):
+            cover_local = cov_path
+        elif cover_url:
+            key = f"igdb{igdb_id}" if igdb_id else re.sub(r'[^\w\-]', '_', name)
+            cached = _cache_cover(key, cover_url)
+            if cached:
+                cover_local = cached
+                try:
+                    _shutil.copy2(cached, cov_path)
+                    cover_local = cov_path
+                except Exception:
+                    pass
+
+        try:
+            new_rec = SwitchTitle(
+                game_id      = None,
+                igdb_id      = igdb_id,
+                nintendo_id  = None,
+                title        = title_str,
+                developer    = developer,
+                publisher    = publisher,
+                cover_url    = cover_url,
+                cover_local  = cover_local,
+                library_path = entry,
+            )
+            db.add(new_rec)
+            db.commit()
+            by_title[title_str.lower()] = new_rec
+            imported += 1
+        except Exception as exc:
+            db.rollback()
+            errors.append({"folder": name, "error": str(exc)})
+            logger.error(f"scan-import failed for {name!r}: {exc}")
+
+    return {"imported": imported, "skipped": skipped, "errors": errors}
+
+
+@router.get("/switch/cover-image")
+def cover_image(id: int = None, title: str = None, db: Session = Depends(_db)):
+    """Serve a game's cached cover art from disk."""
+    from fastapi.responses import FileResponse
+    from sqlalchemy import func as _func
+
+    rec = None
+    if id:
+        rec = db.query(SwitchTitle).filter(SwitchTitle.id == id).first()
+    elif title:
+        rec = db.query(SwitchTitle).filter(
+            _func.lower(SwitchTitle.title) == title.lower()
+        ).first()
+
+    paths: list[str] = []
+    if rec and rec.cover_local:
+        paths.append(rec.cover_local)
+    if rec and rec.library_path:
+        paths.append(os.path.join(rec.library_path, "cover.jpg"))
+    if rec and rec.title:
+        paths.append(os.path.join(_roms_dir(), rec.title, "cover.jpg"))
+
+    for p in paths:
+        if p and os.path.isfile(p):
+            return FileResponse(p, media_type="image/jpeg")
+
+    raise HTTPException(status_code=404, detail="Cover not found")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

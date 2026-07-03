@@ -2933,6 +2933,214 @@ const BrowsePage = {
   },
 };
 
+// ─────────────────────────────────────────────
+// Switch Library — browse games/switch/ROMS
+// ─────────────────────────────────────────────
+const SwitchLibrary = {
+  _importing: false,
+
+  async render() {
+    Views._setApp(`
+      <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+        <div class="d-flex align-items-center gap-2">
+          <i class="bi bi-joystick text-success fs-5"></i>
+          <h5 class="mb-0">Switch Library</h5>
+          <span class="text-secondary small" id="switch-lib-count"></span>
+        </div>
+        <button class="btn btn-sm btn-outline-success" id="switch-import-btn"
+                onclick="SwitchLibrary.runImport()">
+          <i class="bi bi-cloud-download me-1"></i>Scan &amp; Import
+        </button>
+      </div>
+      <div id="switch-lib-body">
+        <div class="text-center py-5"><div class="spinner-border text-secondary"></div></div>
+      </div>`);
+    await this._load();
+  },
+
+  async _load() {
+    let data;
+    try {
+      data = await API.get('/switch/scan');
+    } catch (e) {
+      document.getElementById('switch-lib-body').innerHTML =
+        `<div class="alert alert-danger">${esc(e.message)}</div>`;
+      return;
+    }
+
+    const countEl = document.getElementById('switch-lib-count');
+    if (countEl) countEl.textContent =
+      `${data.total} game${data.total !== 1 ? 's' : ''}`
+      + (data.unmatched ? ` · ${data.unmatched} unmatched` : '');
+
+    const matched   = data.found.filter(g => g.matched);
+    const unmatched = data.found.filter(g => !g.matched);
+
+    let html = '';
+
+    if (matched.length) {
+      html += `<div class="row g-3 mb-4">${matched.map(g => this._card(g)).join('')}</div>`;
+    }
+
+    if (unmatched.length) {
+      html += `
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <span class="text-warning small fw-semibold text-uppercase" style="letter-spacing:.06em">
+            <i class="bi bi-exclamation-triangle me-1"></i>Unmatched (${unmatched.length})
+          </span>
+          <span class="text-secondary small">— no DB record yet, click Scan &amp; Import to create them</span>
+        </div>
+        <div class="row g-3">${unmatched.map(g => this._card(g)).join('')}</div>`;
+    }
+
+    if (!data.total) {
+      html = `<div class="text-center py-5 text-secondary">
+        <i class="bi bi-joystick fs-1 d-block mb-2"></i>
+        No folders found in games/switch/ROMS
+      </div>`;
+    }
+
+    document.getElementById('switch-lib-body').innerHTML = html;
+  },
+
+  _card(g) {
+    const coverSrc = g.cover_url
+      ? esc(g.cover_url)
+      : (g.has_cover || g.cover_local)
+        ? `/api/switch/cover-image?id=${g.title_id || ''}&title=${enc(g.title)}`
+        : null;
+
+    const imgHtml = coverSrc
+      ? `<img src="${coverSrc}" class="card-img-top" alt=""
+              style="aspect-ratio:3/4;object-fit:cover" loading="lazy"
+              onerror="this.parentElement.querySelector('.cover-fallback').style.display='flex';this.style.display='none'">
+         <div class="cover-fallback card-img-top d-none align-items-center justify-content-center bg-dark"
+              style="aspect-ratio:3/4"><i class="bi bi-joystick text-secondary" style="font-size:2.5rem"></i></div>`
+      : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark"
+              style="aspect-ratio:3/4"><i class="bi bi-joystick text-secondary" style="font-size:2.5rem"></i></div>`;
+
+    const pubLine = [g.publisher, g.developer].filter(Boolean).join(' / ');
+    const statusBadge = g.matched
+      ? ''
+      : `<span class="badge bg-warning text-dark" style="font-size:.6rem">unmatched</span>`;
+
+    const fileBadge = g.file_count
+      ? `<span class="text-secondary" style="font-size:.68rem">${g.file_count} file${g.file_count !== 1 ? 's' : ''}</span>`
+      : '';
+
+    return `
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <div class="card h-100 match-result-card" style="cursor:${g.matched ? 'pointer' : 'default'}"
+             ${g.matched ? `onclick="SwitchLibrary.showDetail(${g.title_id})"` : ''}>
+          ${imgHtml}
+          <div class="card-body p-2">
+            <div class="small fw-semibold lh-sm">${esc(g.title)}</div>
+            ${pubLine ? `<div class="text-secondary lh-sm" style="font-size:.72rem">${esc(pubLine)}</div>` : ''}
+            <div class="mt-1 d-flex align-items-center gap-1 flex-wrap">${statusBadge}${fileBadge}</div>
+          </div>
+        </div>
+      </div>`;
+  },
+
+  async runImport() {
+    if (this._importing) return;
+    this._importing = true;
+    const btn = document.getElementById('switch-import-btn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Importing…'; }
+
+    try {
+      const result = await API.post('/switch/scan-import', {});
+      toast(`Imported ${result.imported} game${result.imported !== 1 ? 's' : ''}, ${result.skipped} already matched.`, 'success');
+      if (result.errors?.length) {
+        result.errors.forEach(e => toast(`${e.folder}: ${e.error}`, 'warning'));
+      }
+      await this._load();
+    } catch (e) {
+      toast(`Import failed: ${e.message}`, 'danger');
+    } finally {
+      this._importing = false;
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-cloud-download me-1"></i>Scan &amp; Import'; }
+    }
+  },
+
+  async showDetail(titleId) {
+    let t;
+    try {
+      const all = await API.get('/switch/titles');
+      t = all.find(x => x.id === titleId);
+    } catch (e) { return; }
+    if (!t) return;
+
+    const coverSrc = t.cover_url
+      ? esc(t.cover_url)
+      : t.cover_local
+        ? `/api/switch/cover-image?id=${t.id}`
+        : null;
+
+    const contents = (t.contents || []);
+    const contentRows = contents.map(c => {
+      const lbl = { base: 'Base Game', update: 'Update', dlc: 'DLC' }[c.content_type] || c.content_type;
+      const fname = c.filename || (c.library_path || '').split('/').pop();
+      return `
+        <tr>
+          <td><span class="badge bg-secondary">${esc(lbl)}</span></td>
+          <td class="small text-truncate" style="max-width:240px" title="${esc(c.library_path||'')}">
+            ${esc(fname)}
+          </td>
+          <td class="text-secondary small text-nowrap">${c.version ? 'v'+esc(c.version) : '—'}</td>
+          <td class="text-secondary small text-nowrap">${_humanSize(c.file_size)}</td>
+        </tr>`;
+    }).join('');
+
+    const html = `
+      <div class="modal fade" id="switch-detail-modal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+          <div class="modal-content bg-dark text-white border-secondary">
+            <div class="modal-header border-secondary py-2">
+              <h6 class="modal-title mb-0">
+                <i class="bi bi-joystick me-2 text-success"></i>${esc(t.title)}
+              </h6>
+              <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <div class="d-flex gap-3 align-items-start mb-3">
+                ${coverSrc
+                  ? `<img src="${coverSrc}" alt="" class="flex-shrink-0 rounded"
+                          style="width:100px;object-fit:cover">`
+                  : `<div class="flex-shrink-0 rounded bg-secondary d-flex align-items-center justify-content-center"
+                          style="width:100px;height:133px"><i class="bi bi-joystick text-dark fs-3"></i></div>`}
+                <div class="flex-grow-1">
+                  <div class="fw-semibold fs-6">${esc(t.title)}</div>
+                  ${t.publisher ? `<div class="text-secondary small">${esc(t.publisher)}</div>` : ''}
+                  ${t.developer && t.developer !== t.publisher ? `<div class="text-secondary small">${esc(t.developer)}</div>` : ''}
+                  <div class="mt-2 d-flex flex-wrap gap-1">
+                    ${t.game_id    ? `<code class="small text-success">GameTDB: ${esc(t.game_id)}</code>` : ''}
+                    ${t.igdb_id   ? `<code class="small text-info">IGDB: ${t.igdb_id}</code>` : ''}
+                    ${t.nintendo_id ? `<code class="small text-warning">TitleID: ${esc(t.nintendo_id)}</code>` : ''}
+                  </div>
+                  ${t.library_path ? `<div class="text-secondary mt-2" style="font-size:.72rem">${esc(t.library_path)}</div>` : ''}
+                </div>
+              </div>
+              ${contents.length ? `
+                <h6 class="text-secondary text-uppercase small" style="letter-spacing:.06em">Content</h6>
+                <div class="table-responsive">
+                  <table class="table table-dark table-sm align-middle mb-0">
+                    <thead class="text-secondary"><tr><th>Type</th><th>File</th><th>Version</th><th>Size</th></tr></thead>
+                    <tbody>${contentRows}</tbody>
+                  </table>
+                </div>` : '<div class="text-secondary small">No content records in DB.</div>'}
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    document.getElementById('app').insertAdjacentHTML('beforeend', html);
+    const modal = new bootstrap.Modal(document.getElementById('switch-detail-modal'));
+    document.getElementById('switch-detail-modal').addEventListener('hidden.bs.modal', e => e.target.remove());
+    modal.show();
+  },
+};
+
 const Router = {
   async route() {
     const hash = (location.hash || '#/').slice(1);
@@ -2945,11 +3153,14 @@ const Router = {
     document.getElementById('nav-movies-link')?.classList.toggle('text-info', parts[0] === 'movies');
     document.getElementById('nav-browse-link')?.classList.toggle('text-info', parts[0] === 'browse');
     document.getElementById('nav-about-link')?.classList.toggle('text-info', parts[0] === 'about');
+    document.getElementById('nav-switch-link')?.classList.toggle('text-success', parts[0] === 'switch');
 
     if (parts[0] === 'about') {
       await AboutPage.render();
     } else if (parts[0] === 'browse') {
       await BrowsePage.render();
+    } else if (parts[0] === 'switch') {
+      await SwitchLibrary.render();
     } else if (!parts.length || (parts[0] !== 'category' && parts[0] !== 'search' && parts[0] !== 'movies')) {
       await Views.home();
     } else if (parts[0] === 'movies') {
