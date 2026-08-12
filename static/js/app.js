@@ -290,14 +290,16 @@ const Views = {
   async category(name) {
     this._loading();
 
-    // Fetch items; for movie/music categories also fetch existing matches in parallel
-    const isMovies = /movie/i.test(name);
-    const isMusic  = /music/i.test(name);
+    // Fetch items; for movie/music/audiobook categories also fetch existing matches in parallel
+    const isMovies     = /movie/i.test(name);
+    const isMusic      = /music/i.test(name);
+    const isAudiobooks = /audiobook/i.test(name);
     let items, matchMap = {};
     try {
       const fetches = [API.get(`/categories/${enc(name)}/items`)];
-      if (isMovies) fetches.push(API.get(`/movies/matches?category=${enc(name)}`));
-      if (isMusic)  fetches.push(API.get(`/music/matches?category=${enc(name)}`));
+      if (isMovies)     fetches.push(API.get(`/movies/matches?category=${enc(name)}`));
+      if (isMusic)      fetches.push(API.get(`/music/matches?category=${enc(name)}`));
+      if (isAudiobooks) fetches.push(API.get(`/audiobooks/matches?category=${enc(name)}`));
       [items, matchMap = {}] = await Promise.all(fetches);
     } catch (e) {
       this._setApp(`<div class="alert alert-danger mt-2">Failed to load items: ${esc(e.message)}</div>`);
@@ -317,16 +319,21 @@ const Views = {
 
     const rows = items.map(it => {
       const match = matchMap[it.name];
+      const displayName = it.display_name || it.name;
       let matchLabel = '';
       if (match) {
-        matchLabel = isMusic
-          ? `${match.artist} — ${match.album}${match.year ? ' (' + match.year + ')' : ''}`
-          : (match.formatted_name || '');
+        if (isMusic)
+          matchLabel = `${match.artist} — ${match.album}${match.year ? ' (' + match.year + ')' : ''}`;
+        else if (isAudiobooks)
+          matchLabel = `${match.author ? match.author + ' — ' : ''}${match.title}${match.year ? ' (' + match.year + ')' : ''}`;
+        else
+          matchLabel = match.formatted_name || '';
       }
       return `
         <tr class="item-row" onclick="Router.go('/category/${enc(name)}/${enc(it.name)}')">
           <td>
-            <i class="bi bi-folder me-2 text-warning"></i>${esc(it.name)}
+            <i class="bi bi-folder me-2 text-warning"></i>${esc(displayName)}
+            ${it.parent_name ? `<span class="ms-1 text-secondary" style="font-size:.75rem">(${esc(it.parent_name)})</span>` : ''}
             ${match ? `<span class="ms-2 text-success small" title="${esc(matchLabel)}"><i class="bi bi-check-circle-fill"></i></span>` : ''}
           </td>
           <td class="text-secondary text-nowrap">${it.size_human}</td>
@@ -354,13 +361,15 @@ const Views = {
 
   async item(category, itemName) {
     this._loading();
-    const isMovies = /movie/i.test(category);
-    const isMusic  = /music/i.test(category);
-    const isSwitch = /switch/i.test(category);
+    const isMovies     = /movie/i.test(category);
+    const isMusic      = /music/i.test(category);
+    const isSwitch     = /switch/i.test(category);
+    const isAudiobooks = /audiobook/i.test(category);
     let detail, matchData, switchData, switchDetect;
     try {
       const fetches = [API.get(`/categories/${enc(category)}/items/${enc(itemName)}`)];
-      if (isMovies) fetches.push(API.get(`/movies/match?category=${enc(category)}&item=${enc(itemName)}`));
+      if (isMovies)     fetches.push(API.get(`/movies/match?category=${enc(category)}&item=${enc(itemName)}`));
+      if (isAudiobooks) fetches.push(API.get(`/audiobooks/match?category=${enc(category)}&item=${enc(itemName)}`));
       [detail, matchData] = await Promise.all(fetches);
       if (isSwitch) {
         [switchData, switchDetect] = await Promise.all([
@@ -373,14 +382,17 @@ const Views = {
       return;
     }
 
-    const crumb = breadcrumb([
-      ['Home', '#/'],
-      [esc(category), `#/category/${enc(category)}`],
-      [esc(itemName)],
-    ]);
+    // For bundle sub-items (e.g. "Full Cast/Book 1"), show parent folder as plain text crumb
+    const itemParts   = itemName.split('/');
+    const itemDisplay = itemParts[itemParts.length - 1];
+    const crumbTrail  = [['Home', '#/'], [esc(category), `#/category/${enc(category)}`]];
+    if (itemParts.length > 1) crumbTrail.push([esc(itemParts[0])]);  // no link — bundle folder is not a navigable item
+    crumbTrail.push([esc(itemDisplay)]);
+    const crumb = breadcrumb(crumbTrail);
 
-    const hasMatch       = !!(matchData && matchData.match);
-    const hasSwitchMatch = !!(switchData && switchData.title);
+    const hasMatch          = !!(matchData && matchData.match);
+    const hasAudiobookMatch = isAudiobooks && hasMatch;
+    const hasSwitchMatch    = !!(switchData && switchData.title);
     const actionBtns = [];
     if (detail.has_rar) {
       actionBtns.push(`
@@ -395,6 +407,14 @@ const Views = {
                 ${!hasMatch ? 'disabled title="Save an IMDB match first"' : ''}
                 onclick="Actions.move(${jsStr(category)}, ${jsStr(itemName)})">
           <i class="bi bi-box-arrow-right me-1"></i>Move to Library
+        </button>`);
+    }
+    if (isAudiobooks) {
+      actionBtns.push(`
+        <button class="btn btn-success btn-sm" id="btn-audiobook-move"
+                ${!hasAudiobookMatch ? 'disabled title="Save an audiobook match first"' : ''}
+                onclick="Actions.move(${jsStr(category)}, ${jsStr(itemName)})">
+          <i class="bi bi-book me-1"></i>Move to Library
         </button>`);
     }
     if (isSwitch) {
@@ -422,7 +442,7 @@ const Views = {
         <td class="text-secondary text-nowrap">${f.is_dir ? '—' : f.size_human}</td>
       </tr>`).join('');
 
-    this._setApp(crumb + (isMovies ? _matchPanelHtml() : '') + (isMusic ? _musicMatchPanelHtml() : '') + (isSwitch ? _switchMatchPanelHtml() : '') + actionsHtml + `
+    this._setApp(crumb + (isMovies ? _matchPanelHtml() : '') + (isAudiobooks ? _audiobookMatchPanelHtml() : '') + (isMusic ? _musicMatchPanelHtml() : '') + (isSwitch ? _switchMatchPanelHtml() : '') + actionsHtml + `
       <div class="table-responsive">
         <table class="table table-hover table-dark file-table">
           <thead><tr class="text-secondary"><th>File</th><th>Size</th></tr></thead>
@@ -432,6 +452,9 @@ const Views = {
 
     if (isMovies) {
       MovieMatch.init(category, itemName, matchData);
+    }
+    if (isAudiobooks) {
+      AudiobookMatch.init(category, itemName, matchData);
     }
     if (isMusic) {
       MusicMatch.init(category, itemName);
@@ -621,6 +644,262 @@ const MovieMatch = {
 };
 
 function _matchEl(id) { return document.getElementById(id); }
+
+// ─────────────────────────────────────────────
+// Audiobook match panel HTML template
+// ─────────────────────────────────────────────
+function _audiobookMatchPanelHtml() {
+  return `
+    <div class="card border-secondary mt-4" id="ab-match-panel">
+      <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <span class="small fw-semibold"><i class="bi bi-book-half me-2 text-warning"></i>Audiobook Match</span>
+        <div id="ab-match-status"></div>
+      </div>
+      <div class="card-body pb-2">
+        <div id="ab-current-match"></div>
+        <div class="d-flex gap-2 mt-2 flex-wrap">
+          <input type="text" id="ab-match-title" class="form-control form-control-sm bg-dark text-white border-secondary"
+                 placeholder="Title…" style="min-width:160px;flex:3"
+                 onkeydown="if(event.key==='Enter') AudiobookMatch.search()">
+          <input type="text" id="ab-match-author" class="form-control form-control-sm bg-dark text-white border-secondary"
+                 placeholder="Author (optional)…" style="min-width:140px;flex:2"
+                 onkeydown="if(event.key==='Enter') AudiobookMatch.search()">
+          <button class="btn btn-sm btn-outline-secondary" onclick="AudiobookMatch.search()">
+            <i class="bi bi-search me-1"></i>Search
+          </button>
+        </div>
+        <div class="d-flex gap-2 mt-2">
+          <input type="text" id="ab-match-asin" class="form-control form-control-sm bg-dark text-white border-secondary"
+                 placeholder="ASIN (e.g. B08G9PRS1K) — use for specific editions not found above…"
+                 onkeydown="if(event.key==='Enter') AudiobookMatch.lookupAsin()">
+          <button class="btn btn-sm btn-outline-secondary flex-shrink-0" onclick="AudiobookMatch.lookupAsin()">
+            <i class="bi bi-upc-scan me-1"></i>Lookup
+          </button>
+        </div>
+        <div id="ab-match-results" class="row g-2 mt-2"></div>
+      </div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────────
+// AudiobookMatch — Audible/Audnexus lookup & persistence
+// ─────────────────────────────────────────────
+const AudiobookMatch = {
+  _category: null,
+  _item: null,
+  _results: [],
+
+  async init(category, item, prefetchedData) {
+    this._category = category;
+    this._item = item;
+
+    let data = prefetchedData;
+    if (!data) {
+      try {
+        data = await API.get(`/audiobooks/match?category=${enc(category)}&item=${enc(item)}`);
+      } catch (e) {
+        document.getElementById('ab-match-results').innerHTML =
+          `<div class="col-12"><div class="text-danger small">${esc(e.message)}</div></div>`;
+        return;
+      }
+    }
+
+    const titleEl = document.getElementById('ab-match-title');
+    if (titleEl) titleEl.value = data.suggested_query || '';
+
+    if (data.match) {
+      this._renderMatch(data.match);
+    } else if (data.suggested_asin) {
+      // ASIN detected in filename — look it up directly; faster and more precise
+      const asinEl = document.getElementById('ab-match-asin');
+      if (asinEl) asinEl.value = data.suggested_asin;
+      this.lookupAsin();
+    } else if (data.suggested_query) {
+      this.search();
+    }
+  },
+
+  async search() {
+    const q      = (document.getElementById('ab-match-title')?.value || '').trim();
+    const author = (document.getElementById('ab-match-author')?.value || '').trim();
+    if (!q) return;
+
+    const resultsEl = document.getElementById('ab-match-results');
+    resultsEl.innerHTML = `
+      <div class="col-12 text-secondary small py-2">
+        <span class="spinner-border spinner-border-sm me-2"></span>Searching Audible…
+      </div>`;
+
+    let results;
+    try {
+      results = await API.get(
+        `/audiobooks/search?q=${enc(q)}${author ? `&author=${enc(author)}` : ''}`
+      );
+    } catch (e) {
+      resultsEl.innerHTML =
+        `<div class="col-12"><div class="text-danger small">${esc(e.message)}</div></div>`;
+      return;
+    }
+
+    if (!results.length) {
+      resultsEl.innerHTML =
+        '<div class="col-12 text-secondary small">No results found. Try adjusting the title or author.</div>';
+      return;
+    }
+
+    this._results = results;
+    resultsEl.innerHTML = results.map((r, i) => {
+      const dur = r.duration_minutes
+        ? `${Math.floor(r.duration_minutes / 60)}h ${r.duration_minutes % 60}m`
+        : '';
+      const series = r.series_title
+        ? `<div class="text-info" style="font-size:.7rem">${esc(r.series_title)}${r.series_sequence ? ' #' + esc(r.series_sequence) : ''}</div>`
+        : '';
+      return `
+        <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+          <div class="card h-100 match-result-card" onclick="AudiobookMatch._selectIdx(${i})">
+            ${r.cover_url
+              ? `<img src="${esc(r.cover_url)}" class="card-img-top" alt=""
+                      style="aspect-ratio:1/1;object-fit:cover">`
+              : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark"
+                      style="aspect-ratio:1/1"><i class="bi bi-book-half text-secondary" style="font-size:2rem"></i></div>`
+            }
+            <div class="card-body p-2">
+              ${series}
+              <div class="small fw-semibold lh-sm">${esc(r.title)}</div>
+              <div class="text-secondary" style="font-size:.75rem">${esc(r.author || '')}</div>
+              ${r.narrator ? `<div class="text-secondary" style="font-size:.7rem">Narr: ${esc(r.narrator)}</div>` : ''}
+              ${dur ? `<div class="text-secondary" style="font-size:.7rem">${esc(dur)}</div>` : ''}
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  },
+
+  _selectIdx(i) {
+    const r = this._results[i];
+    if (!r) return;
+    this.select(r);
+  },
+
+  async lookupAsin() {
+    const asin = (document.getElementById('ab-match-asin')?.value || '').trim();
+    if (!asin) return;
+
+    const resultsEl = document.getElementById('ab-match-results');
+    resultsEl.innerHTML = `
+      <div class="col-12 text-secondary small py-2">
+        <span class="spinner-border spinner-border-sm me-2"></span>Looking up ASIN…
+      </div>`;
+
+    let result;
+    try {
+      result = await API.get(`/audiobooks/lookup?asin=${enc(asin)}`);
+    } catch (e) {
+      resultsEl.innerHTML =
+        `<div class="col-12"><div class="text-danger small">${esc(e.message)}</div></div>`;
+      return;
+    }
+
+    // Show as a single result card so the user confirms before saving
+    this._results = [result];
+    const dur = result.duration_minutes
+      ? `${Math.floor(result.duration_minutes / 60)}h ${result.duration_minutes % 60}m`
+      : '';
+    resultsEl.innerHTML = `
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <div class="card h-100 match-result-card" onclick="AudiobookMatch._selectIdx(0)">
+          ${result.cover_url
+            ? `<img src="${esc(result.cover_url)}" class="card-img-top" alt=""
+                    style="aspect-ratio:1/1;object-fit:cover">`
+            : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark"
+                    style="aspect-ratio:1/1"><i class="bi bi-book-half text-secondary" style="font-size:2rem"></i></div>`
+          }
+          <div class="card-body p-2">
+            <div class="small fw-semibold lh-sm">${esc(result.title)}</div>
+            <div class="text-secondary" style="font-size:.75rem">${esc(result.author || '')}</div>
+            ${result.narrator ? `<div class="text-secondary" style="font-size:.7rem">Narr: ${esc(result.narrator)}</div>` : ''}
+            ${dur ? `<div class="text-secondary" style="font-size:.7rem">${esc(dur)}</div>` : ''}
+            <div class="text-info" style="font-size:.7rem">ASIN: ${esc(asin)}</div>
+          </div>
+        </div>
+      </div>`;
+  },
+
+  async select(r) {
+    try {
+      const match = await API.post('/audiobooks/match', {
+        category:         this._category,
+        item_name:        this._item,
+        asin:             r.asin || null,
+        title:            r.title,
+        author:           r.author || null,
+        narrator:         r.narrator || null,
+        year:             r.year ?? null,
+        cover_url:        r.cover_url || null,
+        series_title:     r.series_title || null,
+        series_sequence:  r.series_sequence || null,
+        duration_minutes: r.duration_minutes ?? null,
+        formatted_name:   r.formatted_name,
+      });
+      this._renderMatch(match);
+      document.getElementById('ab-match-results').innerHTML = '';
+      toast(`Matched: ${r.formatted_name}`, 'success');
+    } catch (e) {
+      toast(`Failed to save match: ${e.message}`, 'danger');
+    }
+  },
+
+  async clear() {
+    try {
+      await API.del(`/audiobooks/match?category=${enc(this._category)}&item=${enc(this._item)}`);
+      document.getElementById('ab-current-match').innerHTML = '';
+      document.getElementById('ab-match-status').innerHTML  = '';
+      const moveBtn = document.getElementById('btn-audiobook-move');
+      if (moveBtn) { moveBtn.disabled = true; moveBtn.title = 'Save an audiobook match first'; }
+      toast('Match cleared', 'secondary');
+    } catch (e) {
+      toast(e.message, 'danger');
+    }
+  },
+
+  _renderMatch(match) {
+    document.getElementById('ab-match-status').innerHTML =
+      '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Matched</span>';
+    const moveBtn = document.getElementById('btn-audiobook-move');
+    if (moveBtn) { moveBtn.disabled = false; moveBtn.title = ''; }
+
+    const dur = match.duration_minutes
+      ? `${Math.floor(match.duration_minutes / 60)}h ${match.duration_minutes % 60}m`
+      : null;
+
+    document.getElementById('ab-current-match').innerHTML = `
+      <div class="d-flex gap-3 align-items-start p-2 rounded mb-2
+                  bg-success bg-opacity-10 border border-success border-opacity-25">
+        ${match.cover_url
+          ? `<img src="${esc(match.cover_url)}" alt="" class="flex-shrink-0 rounded"
+                  style="width:54px;height:54px;object-fit:cover">`
+          : `<div class="flex-shrink-0 rounded bg-dark d-flex align-items-center justify-content-center"
+                  style="width:54px;height:54px"><i class="bi bi-book-half text-secondary"></i></div>`
+        }
+        <div class="flex-grow-1 min-w-0">
+          <div class="fw-semibold">${esc(match.title)}</div>
+          <div class="text-secondary small">${esc(match.author || '')}</div>
+          ${match.narrator ? `<div class="text-secondary small">Narrator: ${esc(match.narrator)}</div>` : ''}
+          ${match.series_title ? `<div class="text-info small">${esc(match.series_title)}${match.series_sequence ? ' #' + esc(match.series_sequence) : ''}</div>` : ''}
+          ${dur ? `<div class="text-secondary small">${esc(dur)}</div>` : ''}
+          <div class="mt-2">
+            <code class="small text-success">${esc(match.formatted_name)}</code>
+            <span class="text-secondary small ms-1">← directory name to use</span>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-outline-danger flex-shrink-0"
+                onclick="AudiobookMatch.clear()" title="Clear match">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>`;
+  },
+};
 
 // ─────────────────────────────────────────────
 // Music match panel HTML template
@@ -2091,11 +2370,19 @@ const MovieDiscover = {
       <div id="movie-search-results"></div>
       <div id="movie-confirm-panel"></div>`;
 
-    // Pre-seeded TMDB ID from browse page — auto-confirm
+    // Pre-seeded TMDB ID from browse/find page — confirm directly without search results
     if (this._preConfirmId) {
       const tmdbId = this._preConfirmId;
       this._preConfirmId = null;
-      await this.confirm(tmdbId);
+      const panel = document.getElementById('movie-confirm-panel');
+      panel.innerHTML = '<div class="text-secondary small py-3"><div class="spinner-border spinner-border-sm me-2"></div>Checking all systems…</div>';
+      try {
+        const data = await API.post('/movies/confirm', { tmdb_id: tmdbId });
+        this._confirmed = data;
+        this._renderConfirmPanel(data);
+      } catch (e) {
+        panel.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`;
+      }
       return;
     }
 
@@ -3189,7 +3476,11 @@ const SwitchLibrary = {
     toast(`Sending to ${target.name}… make sure Awoo is open in Network Install mode.`, 'info');
     try {
       const r = await API.post('/switch/install', { title_id: titleId, target_id: target.id });
-      toast(`Install started on ${target.name} — ${r.files_sent} file(s) queued.`, 'success');
+      if (r.job_id) {
+        JobPoller.track(r.job_id, { type: 'switch_install', itemName: r.title });
+        JobsPanel.open();
+      }
+      toast(`Transfer started — ${r.files_sent} file(s) sent to ${target.name}.`, 'success');
     } catch (e) {
       toast(`Install failed: ${e.message}`, 'danger');
     }
@@ -3355,7 +3646,7 @@ const FindPage = {
     const el = document.getElementById('find-movie-browse');
     if (!el) return;
     try {
-      const data = await API.get('/iptorrents/browse?limit=6&offset=0');
+      const data = await API.get('/iptorrents/browse?limit=18&offset=0');
       const movies = data.items || [];
       if (!movies.length) { el.innerHTML = '<div class="col-12 text-secondary small">Nothing loaded.</div>'; return; }
       el.innerHTML = movies.map(m => {

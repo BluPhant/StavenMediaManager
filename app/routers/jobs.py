@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..models import Job, MovieMatch
+from ..models import AudiobookMatch, Job, MovieMatch
 from ..services import job_manager
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -92,16 +92,32 @@ def create_move_job(req: MoveRequest, db: Session = Depends(get_db)):
     if not os.path.isdir(item_path):
         raise HTTPException(status_code=404, detail="Item directory not found")
 
-    match = (
-        db.query(MovieMatch)
-        .filter(MovieMatch.category == req.category, MovieMatch.item_name == req.item_name)
-        .first()
-    )
-    if not match:
-        raise HTTPException(
-            status_code=400,
-            detail="No IMDB match saved. Match the title before moving.",
+    is_audiobooks = req.category.lower() in ("audiobooks", "audiobook")
+
+    if is_audiobooks:
+        match = (
+            db.query(AudiobookMatch)
+            .filter(AudiobookMatch.category == req.category,
+                    AudiobookMatch.item_name == req.item_name)
+            .first()
         )
+        if not match:
+            raise HTTPException(
+                status_code=400,
+                detail="No audiobook match saved. Match the title before moving.",
+            )
+    else:
+        match = (
+            db.query(MovieMatch)
+            .filter(MovieMatch.category == req.category,
+                    MovieMatch.item_name == req.item_name)
+            .first()
+        )
+        if not match:
+            raise HTTPException(
+                status_code=400,
+                detail="No IMDB match saved. Match the title before moving.",
+            )
 
     existing = (
         db.query(Job)

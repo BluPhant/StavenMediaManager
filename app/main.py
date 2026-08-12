@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .database import Base, engine
-from .routers import about, btn, categories, iptorrents, jobs, library, movies, music, sources, switch
+from .routers import about, audiobooks, btn, categories, iptorrents, jobs, library, movies, music, sources, switch
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Media Manager", lifespan=lifespan)
 
 app.include_router(about.router, prefix="/api")
+app.include_router(audiobooks.router, prefix="/api")
 app.include_router(btn.router, prefix="/api")
 app.include_router(categories.router, prefix="/api")
 app.include_router(iptorrents.router, prefix="/api")

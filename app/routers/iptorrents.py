@@ -137,6 +137,14 @@ _browse_cache: list | None = None
 _browse_cache_at: float = 0.0
 _BROWSE_TTL = 300.0  # 5 minutes
 
+# Releases (IPTResult objects) keyed by tmdb_id — populated by browse, used by confirm as last-resort fallback
+_browse_releases_by_tmdb_id: dict[int, list] = {}
+
+
+def get_browse_releases(tmdb_id: int) -> list:
+    """Return cached IPTResult releases for a tmdb_id, or [] if not in cache."""
+    return _browse_releases_by_tmdb_id.get(tmdb_id, [])
+
 
 @router.get("/browse")
 def iptorrents_browse(limit: int = 20, offset: int = 0):
@@ -210,6 +218,13 @@ def iptorrents_browse(limit: int = 20, offset: int = 0):
 
     enriched.sort(key=lambda pair: pair[0])
     enriched = [e for _, e in enriched]
+
+    # Populate browse releases cache (tmdb_id → raw IPTResult list) before dropping releases
+    _browse_releases_by_tmdb_id.clear()
+    for e in enriched:
+        tid = (e.get("tmdb") or {}).get("tmdb_id")
+        if tid and e.get("releases"):
+            _browse_releases_by_tmdb_id[tid] = e["releases"]
 
     # Build response
     result = []

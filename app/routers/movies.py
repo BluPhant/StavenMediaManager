@@ -141,7 +141,8 @@ def confirm_movie(req: ConfirmRequest, db: Session = Depends(get_db)):
                                runtime_minutes=runtime_min,
                                current_plex_rank=plex_rank,
                                title=details.get("title", ""),
-                               year=details.get("year"))
+                               year=details.get("year"),
+                               tmdb_id=req.tmdb_id)
 
     # 3. Determine status + upgrade flag
     status            = _determine_status(plex_info, sbx_info, ipt_info)
@@ -532,7 +533,8 @@ def _score_result(r, runtime_minutes: int) -> float:
 
 def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
                 current_plex_rank: int = -1,
-                title: str = "", year: int | None = None) -> dict:
+                title: str = "", year: int | None = None,
+                tmdb_id: int | None = None) -> dict:
     """
     Search IPT by IMDB ID, score results, and return:
     - results:      quality-filtered & scored list (above current Plex quality if upgrading)
@@ -559,18 +561,27 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
         raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
         search_method = "imdb"
         if not raw and title:
-            # IPT didn't return results for the IMDB ID — fall back to title search.
-            # Some torrents aren't tagged with their IMDB ID in IPT's index.
-            # Strip punctuation that appears in TMDB titles but not torrent filenames.
-            # Apostrophes are removed (not replaced with space) so "Ocean's" → "Oceans"
-            # rather than "Ocean s" which poisons the search.
-            clean_title = title.replace("'", "").replace("’", "")
+            # IPT didn’t return results for the IMDB ID — fall back to title search.
+            # Some torrents aren’t tagged with their IMDB ID in IPT’s index.
+            # Apostrophes removed (not replaced with space): "Ocean’s" → "Oceans".
+            clean_title = title.replace("’", "").replace("’", "")
             clean_title = " ".join(re.sub(r"[^\w\s]", " ", clean_title).split())
-            q = f"{clean_title} {year}" if year else clean_title
-            raw = ipt.search(query=q, category="movies", limit=100)
-            raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
+            # Try title+year first; if year mismatch prevents a match, retry title-only.
+            for q in ([f"{clean_title} {year}", clean_title] if year else [clean_title]):
+                raw = ipt.search(query=q, category="movies", limit=100)
+                raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
+                if raw:
+                    logger.info(f"IPT title fallback ‘{q}’: {len(raw)} results")
+                    break
             search_method = "title"
-            logger.info(f"IPT IMDB fallback to title search '{q}': {len(raw)} results")
+        if not raw and tmdb_id:
+            # Last resort: check the 5-min browse cache for releases we already saw.
+            # Handles new uploads not yet indexed by IMDB ID on IPT.
+            from .iptorrents import get_browse_releases
+            raw = get_browse_releases(tmdb_id)
+            if raw:
+                search_method = "browse_cache"
+                logger.info(f"IPT browse-cache fallback for tmdb_id={tmdb_id}: {len(raw)} releases")
         if not raw:
             return {**_empty, "configured": True}
 

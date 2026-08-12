@@ -87,6 +87,31 @@ class MovieSearch(Base):
     queue_check_count = Column(Integer, default=0, nullable=False)
 
 
+class AudiobookMatch(Base):
+    """Audible/Audnexus match confirmed for an audiobook item in the incoming folder."""
+    __tablename__ = "audiobook_matches"
+
+    id               = Column(Integer, primary_key=True, index=True)
+    category         = Column(String(200), nullable=False)
+    item_name        = Column(String(500), nullable=False)
+    asin             = Column(String(20), nullable=True)
+    title            = Column(String(500), nullable=False)
+    author           = Column(String(500), nullable=True)
+    narrator         = Column(String(500), nullable=True)
+    year             = Column(Integer, nullable=True)
+    cover_url        = Column(String(1000), nullable=True)
+    series_title     = Column(String(500), nullable=True)
+    series_sequence  = Column(String(50), nullable=True)
+    duration_minutes = Column(Integer, nullable=True)
+    formatted_name   = Column(String(500), nullable=False)
+    created_at       = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at       = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("category", "item_name", name="uq_audiobook_match_item"),
+    )
+
+
 class MusicMatch(Base):
     """Discogs match confirmed for a music item in the incoming folder."""
     __tablename__ = "music_matches"
@@ -122,7 +147,7 @@ class UpgradeReview(Base):
     imdb_id        = Column(String(20), nullable=True)
     title          = Column(String(500), nullable=False)
     old_path       = Column(String(1000), nullable=False)   # folder in .trash
-    new_path       = Column(String(1000), nullable=False)   # folder in movies
+    new_path       = Column(String(1000), nullable=True)    # folder in movies — filled after new files land
     old_filename   = Column(String(500), nullable=True)
     new_filename   = Column(String(500), nullable=True)
     old_size_bytes = Column(Integer, nullable=True)

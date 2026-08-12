@@ -120,7 +120,14 @@ def detect_type(label: str, file_paths: list[str], name: str = "") -> str:
         t = EXT_TYPE_MAP.get(ext)
         if t:
             votes[t] = votes.get(t, 0) + 1
-    return max(votes, key=votes.get) if votes else "_unsorted"
+    if votes:
+        return max(votes, key=votes.get)
+    # All files are archives (.rar/.r00/.nfo/.sfv etc.) — no extension votes.
+    # Fall back to name-based detection: year + resolution in name → movie.
+    if name and re.search(r'\b(19|20)\d{2}\b', name) and re.search(
+            r'\b(2160p|1080p|720p|480p|4[Kk]|UHD|BluRay|WEB-DL|WEBRip)\b', name, re.IGNORECASE):
+        return "movies"
+    return "_unsorted"
 
 
 # ── Torrent info-hash extraction ─────────────────────────────────────────────

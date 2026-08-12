@@ -98,14 +98,15 @@ def _auto_move_if_matched(item_name: str, category: str, source_path: str) -> bo
     """
     db = SessionLocal()
     try:
-        if category == "movies":
+        if category in ("movies", "_unsorted"):
             match = (
                 db.query(MovieMatch)
-                .filter(MovieMatch.category == category, MovieMatch.item_name == item_name)
+                .filter(MovieMatch.item_name == item_name)
                 .first()
             )
             if not match:
                 return False
+            category = match.category  # use stored category (e.g. "movies") not "_unsorted"
             # Skip if a move job already ran for this source (prevents duplicates)
             recent = db.query(Job).filter(
                 Job.source_path == source_path,
@@ -131,6 +132,39 @@ def _auto_move_if_matched(item_name: str, category: str, source_path: str) -> bo
             logger.info(
                 f"Auto-move queued: '{item_name}' → '{match.formatted_name}' (job {job.id})"
             )
+            return True
+
+        if category == "audiobooks":
+            from ..models import AudiobookMatch
+            match = (
+                db.query(AudiobookMatch)
+                .filter(AudiobookMatch.category == category,
+                        AudiobookMatch.item_name == item_name)
+                .first()
+            )
+            if not match:
+                return False
+            recent = db.query(Job).filter(
+                Job.source_path == source_path,
+                Job.type == "move",
+                Job.status.in_(["pending", "running", "done"]),
+            ).first()
+            if recent:
+                logger.info(f"Skipping auto-move for '{item_name}' — job #{recent.id} already exists")
+                return False
+            job = Job(
+                type="move",
+                category=category,
+                item_name=item_name,
+                source_path=source_path,
+                status="pending",
+                progress=0,
+            )
+            db.add(job)
+            db.commit()
+            db.refresh(job)
+            job_manager.submit_move(job.id, source_path, match.formatted_name, category, imdb_id="")
+            logger.info(f"Auto-move queued: '{item_name}' → '{match.formatted_name}' (job {job.id})")
             return True
 
         if category in ("switch-games", "switch games"):

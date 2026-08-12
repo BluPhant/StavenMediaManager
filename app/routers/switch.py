@@ -24,11 +24,13 @@ import logging
 import os
 import re
 import socket
+import threading
+import time
 import urllib.parse
 import urllib.request
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -43,6 +45,100 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["switch"])
 
 _COVER_DIR = os.path.join(settings.config_dir, "switch_covers")
+
+# ── Transfer progress registry ────────────────────────────────────────────────
+# Tracks in-flight Switch installs so the Jobs panel can show live progress.
+# Keyed by URL-decoded relative path (e.g. "Pikuniku/sxs-pikuniku.nsp").
+_TRANSFER_REGISTRY: dict[str, dict] = {}
+_registry_lock = threading.Lock()
+
+
+def _register_transfer(job_id: int, file_entries: list[tuple[str, int]]) -> None:
+    """Record a set of files belonging to one install job."""
+    total_bytes = sum(sz for _, sz in file_entries)
+    all_paths = [p for p, _ in file_entries]
+    now = time.monotonic()
+    with _registry_lock:
+        for rel_path, file_size in file_entries:
+            _TRANSFER_REGISTRY[rel_path] = {
+                "job_id": job_id,
+                "file_size": max(file_size, 1),
+                "bytes_served": 0,
+                "total_bytes": max(total_bytes, 1),
+                "all_paths": all_paths,
+                "registered_at": now,
+                "first_byte_at": None,
+                "last_byte_at": None,
+            }
+
+
+def _note_bytes(rel_path: str, count: int) -> None:
+    """Call this from the file-serve generator after each chunk."""
+    with _registry_lock:
+        entry = _TRANSFER_REGISTRY.get(rel_path)
+        if entry is None:
+            return
+        now = time.monotonic()
+        if entry["first_byte_at"] is None:
+            entry["first_byte_at"] = now
+        entry["last_byte_at"] = now
+        entry["bytes_served"] = min(entry["bytes_served"] + count, entry["file_size"])
+
+
+def _start_progress_watcher() -> None:
+    from ..services import job_manager as _jm
+
+    def _watcher():
+        while True:
+            time.sleep(2)
+            with _registry_lock:
+                if not _TRANSFER_REGISTRY:
+                    continue
+                # Group entries by job_id, avoiding duplicate work per job
+                seen_jobs: set[int] = set()
+                jobs_snapshot: list[tuple[int, list[str], int]] = []
+                for entry in _TRANSFER_REGISTRY.values():
+                    jid = entry["job_id"]
+                    if jid not in seen_jobs:
+                        seen_jobs.add(jid)
+                        jobs_snapshot.append((jid, entry["all_paths"], entry["total_bytes"]))
+
+            now = time.monotonic()
+            for jid, all_paths, total_bytes in jobs_snapshot:
+                with _registry_lock:
+                    entries = [_TRANSFER_REGISTRY.get(p) for p in all_paths]
+                    entries = [e for e in entries if e is not None]
+                    if not entries:
+                        continue
+                    combined = sum(e["bytes_served"] for e in entries)
+                    all_done = all(e["bytes_served"] >= e["file_size"] for e in entries)
+                    first_at = min((e["first_byte_at"] for e in entries if e["first_byte_at"]), default=None)
+                    last_at = max((e["last_byte_at"] for e in entries if e["last_byte_at"]), default=None)
+                    reg_at = min(e["registered_at"] for e in entries)
+
+                if all_done:
+                    _jm.update_job(jid, status="done", progress=100, message="Installed")
+                    with _registry_lock:
+                        for p in all_paths:
+                            _TRANSFER_REGISTRY.pop(p, None)
+                elif first_at and last_at and (now - last_at) > 120:
+                    _jm.update_job(jid, status="error", message="Transfer stalled — Switch disconnected?")
+                    with _registry_lock:
+                        for p in all_paths:
+                            _TRANSFER_REGISTRY.pop(p, None)
+                elif first_at is None and (now - reg_at) > 90:
+                    _jm.update_job(jid, status="error", message="Switch did not connect within 90s")
+                    with _registry_lock:
+                        for p in all_paths:
+                            _TRANSFER_REGISTRY.pop(p, None)
+                else:
+                    pct = min(99, int(combined / total_bytes * 100)) if total_bytes else 5
+                    _jm.update_job(jid, progress=pct)
+
+    threading.Thread(target=_watcher, daemon=True, name="switch-progress-watcher").start()
+
+
+_start_progress_watcher()
 _REV_RE = re.compile(r'\s*\[rev\s+[\d.]+\]', re.IGNORECASE)
 
 
@@ -646,11 +742,12 @@ def scan_import(db: Session = Depends(_db)):
 
 
 @router.api_route("/switch/file/{file_path:path}", methods=["GET", "HEAD"])
-def serve_game_file(file_path: str):
+async def serve_game_file(file_path: str, request: Request):
     """
-    Serve a game file from the ROMS library with range-request support.
-    Called by Awoo/Tinfoil during network install — HEAD first (file size),
-    then GET with Range headers to stream the bytes.
+    Serve a game file from the ROMS library with proper range-request support.
+    Awoo/Tinfoil sends HEAD to get file size, then GET with Range headers
+    to fetch the file in chunks. Starlette's FileResponse ignores Range headers
+    and always returns 200 + full file, so we handle ranges explicitly here.
     """
     roms = os.path.normpath(_roms_dir())
     full = os.path.normpath(os.path.join(roms, file_path))
@@ -658,11 +755,57 @@ def serve_game_file(file_path: str):
         raise HTTPException(status_code=403, detail="Access denied")
     if not os.path.isfile(full):
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(
-        full,
-        media_type="application/octet-stream",
-        headers={"Accept-Ranges": "bytes"},
+
+    file_size = os.path.getsize(full)
+    range_header = request.headers.get("Range")
+    logger.info(
+        "serve_game_file %s %s size=%d range=%s",
+        request.method, file_path, file_size, range_header or "none"
     )
+
+    common_headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Type": "application/octet-stream",
+    }
+
+    if range_header:
+        m = re.match(r"bytes=(\d+)-(\d*)", range_header)
+        if m:
+            start = int(m.group(1))
+            end = int(m.group(2)) if m.group(2) else file_size - 1
+            end = min(end, file_size - 1)
+            length = end - start + 1
+
+            headers_206 = {
+                **common_headers,
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Content-Length": str(length),
+            }
+
+            if request.method == "HEAD":
+                return Response(status_code=206, headers=headers_206)
+
+            async def _ranged():
+                with open(full, "rb") as f:
+                    f.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = f.read(min(65536, remaining))
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                        _note_bytes(file_path, len(chunk))
+                        yield chunk
+
+            return StreamingResponse(_ranged(), status_code=206, headers=headers_206)
+
+    # No Range header — full file
+    headers_200 = {**common_headers, "Content-Length": str(file_size)}
+    if request.method == "HEAD":
+        return Response(status_code=200, headers=headers_200)
+
+    return FileResponse(full, media_type="application/octet-stream",
+                        headers={"Accept-Ranges": "bytes"})
 
 
 # ── Switch targets ─────────────────────────────────────────────────────────────
@@ -739,6 +882,7 @@ def install_to_switch(req: InstallRequest, db: Session = Depends(_db)):
     host_port = settings.switch_host_port  # e.g. 8088 when Docker maps host:8088→container:8080
     roms      = os.path.normpath(_roms_dir())
     file_urls: list[str] = []
+    file_entries: list[tuple[str, int]] = []  # (rel_path, file_size) for progress tracking
 
     def _add_file(fpath: str) -> None:
         fpath = os.path.normpath(fpath)
@@ -746,6 +890,11 @@ def install_to_switch(req: InstallRequest, db: Session = Depends(_db)):
             rel = os.path.relpath(fpath, roms).replace("\\", "/")
             url = f"{host_ip}:{host_port}/api/switch/file/{urllib.parse.quote(rel, safe='/')}"
             file_urls.append(url)
+            try:
+                sz = os.path.getsize(fpath)
+            except OSError:
+                sz = 0
+            file_entries.append((rel, sz))
 
     # Primary: file paths stored on SwitchContent records
     for c in contents:
@@ -762,17 +911,42 @@ def install_to_switch(req: InstallRequest, db: Session = Depends(_db)):
     if not file_urls:
         raise HTTPException(status_code=400, detail="No game files found on disk for this title")
 
+    # Create a job so the UI can track download progress
+    from ..database import SessionLocal as _SL
+    from ..models import Job
+    from ..services import job_manager as _jm
+
+    db2 = _SL()
+    try:
+        job = Job(
+            type="switch_install",
+            category="switch-games",
+            item_name=f"{title.title} → {target.name}",
+            source_path=title.library_path or "",
+            status="running",
+            progress=0,
+            message="Waiting for Switch to connect…",
+        )
+        db2.add(job)
+        db2.commit()
+        db2.refresh(job)
+        job_id = job.id
+    finally:
+        db2.close()
+
     try:
         _send_to_awoo(target.ip_address, target.port, file_urls)
     except OSError as exc:
+        _jm.update_job(job_id, status="error", message=str(exc))
         raise HTTPException(
             status_code=503,
             detail=f"Could not connect to {target.name} ({target.ip_address}:{target.port}) — "
                    f"make sure Awoo is open in Network Install mode. Error: {exc}",
         )
 
-    logger.info(f"Install initiated: {title.title} → {target.name} ({len(file_urls)} file(s))")
-    return {"title": title.title, "target": target.name, "files_sent": len(file_urls)}
+    _register_transfer(job_id, file_entries)
+    logger.info(f"Install initiated: {title.title} → {target.name} ({len(file_urls)} file(s), job {job_id})")
+    return {"title": title.title, "target": target.name, "files_sent": len(file_urls), "job_id": job_id}
 
 
 @router.get("/switch/cover-image")
