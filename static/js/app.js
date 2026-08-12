@@ -1416,7 +1416,7 @@ const SwitchMatch = {
       JobPoller.track(r.job_id, { type: 'move', category, itemName });
       JobsPanel.open();
       toast(`Moving to library — Job #${r.job_id}`, 'success');
-      Router.go('/');
+      Router.go(`/category/${enc(category)}`);
     } catch (e) {
       toast(`Move failed: ${e.message}`, 'danger');
     }
@@ -1744,7 +1744,7 @@ const JobPoller = {
       if (ctx.type === 'extract') {
         Router.refresh();
       } else if (ctx.type === 'move' || ctx.type === 'music_import') {
-        Router.go('/');
+        Router.go(`/category/${enc(ctx.category)}`);
       }
     } catch (_) {}
   },
