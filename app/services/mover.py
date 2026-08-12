@@ -178,6 +178,17 @@ def run_move(job_id: int, source_path: str, formatted_name: str,
         # Remove now-empty source directory (best-effort)
         try:
             os.rmdir(source_path)
+            # If this was a bundle sub-item (e.g. "Full Cast/Book 1"), also clean up
+            # the parent bundle folder once it's empty. Guard against removing the
+            # category root itself.
+            parent = os.path.dirname(source_path)
+            category_dir = os.path.join(settings.incoming_dir, category)
+            if os.path.normpath(parent) != os.path.normpath(category_dir):
+                try:
+                    os.rmdir(parent)
+                    logger.info("Removed empty bundle folder: %s", parent)
+                except OSError:
+                    pass
         except OSError:
             pass
 
