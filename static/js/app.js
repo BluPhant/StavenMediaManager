@@ -151,9 +151,10 @@ const Views = {
         <div class="card-body p-3">
           <div class="text-secondary small mb-2">Find…</div>
           <div class="d-flex gap-2 flex-wrap">
-            <a href="#/find/movie"  class="btn btn-outline-info     text-nowrap"><i class="bi bi-film me-2"></i>a movie</a>
-            <a href="#/find/switch" class="btn btn-outline-success  text-nowrap"><i class="bi bi-joystick me-2"></i>a Switch game</a>
-            <a href="#/find/album"  class="btn btn-outline-danger   text-nowrap"><i class="bi bi-music-note-beamed me-2"></i>an album</a>
+            <a href="#/find/movie"     class="btn btn-outline-info     text-nowrap"><i class="bi bi-film me-2"></i>a movie</a>
+            <a href="#/find/audiobook" class="btn btn-outline-warning  text-nowrap"><i class="bi bi-book-half me-2"></i>an audiobook</a>
+            <a href="#/find/switch"    class="btn btn-outline-success  text-nowrap"><i class="bi bi-joystick me-2"></i>a Switch game</a>
+            <a href="#/find/album"     class="btn btn-outline-danger   text-nowrap"><i class="bi bi-music-note-beamed me-2"></i>an album</a>
           </div>
           ${chipHtml}
         </div>
@@ -3596,9 +3597,10 @@ const FindPage = {
 
   _rail() {
     const opts = [
-      { key: 'movie',  icon: 'bi-film',              color: 'text-info',    label: 'a movie' },
-      { key: 'switch', icon: 'bi-joystick',           color: 'text-success', label: 'a Switch game' },
-      { key: 'album',  icon: 'bi-music-note-beamed',  color: 'text-danger',  label: 'an album' },
+      { key: 'movie',     icon: 'bi-film',              color: 'text-info',    label: 'a movie' },
+      { key: 'audiobook', icon: 'bi-book-half',          color: 'text-warning', label: 'an audiobook' },
+      { key: 'switch',    icon: 'bi-joystick',           color: 'text-success', label: 'a Switch game' },
+      { key: 'album',     icon: 'bi-music-note-beamed',  color: 'text-danger',  label: 'an album' },
     ];
     return opts.map(o => {
       const active = this._type === o.key;
@@ -3615,9 +3617,10 @@ const FindPage = {
   _renderPanel() {
     const panel = document.getElementById('find-panel');
     if (!panel) return;
-    if (this._type === 'movie')  { this._moviePanel(panel); return; }
-    if (this._type === 'switch') { this._switchPanel(panel); return; }
-    if (this._type === 'album')  { this._albumPanel(panel); return; }
+    if (this._type === 'movie')     { this._moviePanel(panel); return; }
+    if (this._type === 'audiobook') { this._audiobookPanel(panel); return; }
+    if (this._type === 'switch')    { this._switchPanel(panel); return; }
+    if (this._type === 'album')     { this._albumPanel(panel); return; }
   },
 
   // ── Movie ────────────────────────────────────────────────────────────────────
@@ -3701,6 +3704,217 @@ const FindPage = {
   _goMovie(tmdbId, title) {
     if (tmdbId) MovieDiscover.goById(tmdbId);
     else MovieDiscover.searchFor(title);
+  },
+
+  // ── Audiobook ────────────────────────────────────────────────────────────────
+  _abConfirmed: null,
+
+  _audiobookPanel(panel) {
+    this._abConfirmed = null;
+    panel.innerHTML = `
+      <div class="d-flex gap-2 mb-3 flex-wrap">
+        <input id="find-ab-title" type="text" class="form-control" placeholder="Title…"
+               style="flex:2;min-width:160px"
+               onkeydown="if(event.key==='Enter') FindPage._audiobookSearch()">
+        <input id="find-ab-author" type="text" class="form-control" placeholder="Author…"
+               style="flex:1;min-width:110px"
+               onkeydown="if(event.key==='Enter') FindPage._audiobookSearch()">
+        <button class="btn btn-warning text-nowrap" onclick="FindPage._audiobookSearch()">
+          <i class="bi bi-search me-1"></i>Search
+        </button>
+      </div>
+      <div id="find-ab-results">
+        <div class="text-secondary small mb-2 d-flex align-items-center gap-2">
+          <i class="bi bi-fire text-danger"></i>New on IPT
+        </div>
+        <div id="find-ab-browse" class="row g-2">
+          <div class="col-12"><div class="spinner-border spinner-border-sm text-secondary"></div></div>
+        </div>
+      </div>
+      <div id="find-ab-confirm"></div>`;
+    document.getElementById('find-ab-title').focus();
+    this._loadAudiobookBrowse();
+  },
+
+  async _loadAudiobookBrowse() {
+    const el = document.getElementById('find-ab-browse');
+    if (!el) return;
+    try {
+      const data  = await API.get('/iptorrents/browse-audiobooks?limit=18');
+      const items = data.items || [];
+      if (!items.length) { el.innerHTML = '<div class="col-12 text-secondary small">Nothing loaded.</div>'; return; }
+      el.innerHTML = items.map((ab, i) => {
+        const dur = ab.duration_minutes
+          ? `${Math.floor(ab.duration_minutes / 60)}h ${ab.duration_minutes % 60}m`
+          : '';
+        return `
+          <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+            <div class="card h-100 match-result-card" onclick="FindPage._audiobookConfirm(${jsStr(JSON.stringify(ab))})">
+              ${ab.cover_url
+                ? `<img src="${esc(ab.cover_url)}" class="card-img-top" style="aspect-ratio:1/1;object-fit:cover" loading="lazy">`
+                : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark" style="aspect-ratio:1/1">
+                     <i class="bi bi-book-half text-secondary" style="font-size:2rem"></i>
+                   </div>`}
+              <div class="card-body p-2">
+                <div class="small fw-semibold lh-sm">${esc(ab.title)}</div>
+                <div class="text-secondary" style="font-size:.72rem">${esc(ab.author || '')}</div>
+                <div class="mt-1 d-flex gap-1 align-items-center flex-wrap">
+                  ${ab.year ? `<span class="text-secondary" style="font-size:.68rem">${ab.year}</span>` : ''}
+                  ${dur ? `<span class="text-secondary" style="font-size:.68rem">${esc(dur)}</span>` : ''}
+                  <span class="text-secondary" style="font-size:.68rem">${ab.total_seeds} seeds</span>
+                </div>
+              </div>
+            </div>
+          </div>`;
+      }).join('');
+    } catch (_) {
+      if (el) el.innerHTML = '';
+    }
+  },
+
+  async _audiobookSearch() {
+    const title  = (document.getElementById('find-ab-title')?.value  || '').trim();
+    const author = (document.getElementById('find-ab-author')?.value || '').trim();
+    if (!title) return;
+    const res = document.getElementById('find-ab-results');
+    res.innerHTML = '<div class="spinner-border spinner-border-sm text-secondary"></div>';
+    try {
+      const results = await API.get(`/audiobooks/search?q=${enc(title)}${author ? '&author=' + enc(author) : ''}`);
+      if (!results.length) { res.innerHTML = '<div class="text-secondary small">No results on Audible.</div>'; return; }
+      res.innerHTML = `<div class="row g-2">${results.map(r => {
+        const dur    = r.duration_minutes ? `${Math.floor(r.duration_minutes/60)}h ${r.duration_minutes%60}m` : '';
+        const series = r.series_title
+          ? `<div class="text-warning" style="font-size:.68rem">${esc(r.series_title)}${r.series_sequence ? ' #'+r.series_sequence : ''}</div>`
+          : '';
+        return `
+          <div class="col-6 col-md-4 col-lg-3">
+            <div class="card border-secondary match-result-card h-100"
+                 onclick="FindPage._audiobookConfirm(${jsStr(JSON.stringify(r))})">
+              ${r.cover_url
+                ? `<img src="${esc(r.cover_url)}" class="card-img-top" style="aspect-ratio:1/1;object-fit:cover" loading="lazy">`
+                : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark" style="aspect-ratio:1/1">
+                     <i class="bi bi-book-half text-secondary" style="font-size:2rem"></i>
+                   </div>`}
+              <div class="card-body p-2">
+                ${series}
+                <div class="small fw-semibold lh-sm">${esc(r.title)}</div>
+                <div class="text-secondary" style="font-size:.72rem">${esc(r.author || '')}</div>
+                ${r.narrator ? `<div class="text-secondary" style="font-size:.7rem">Narr: ${esc(r.narrator)}</div>` : ''}
+                ${dur ? `<div class="text-secondary" style="font-size:.68rem">${esc(dur)}</div>` : ''}
+              </div>
+            </div>
+          </div>`;
+      }).join('')}</div>`;
+    } catch (e) {
+      res.innerHTML = `<div class="text-danger small">${esc(e.message)}</div>`;
+    }
+  },
+
+  async _audiobookConfirm(ab) {
+    this._abConfirmed = ab;
+    const panel = document.getElementById('find-ab-confirm');
+    if (!panel) return;
+
+    const dur    = ab.duration_minutes ? `${Math.floor(ab.duration_minutes/60)}h ${ab.duration_minutes%60}m` : '';
+    const series = ab.series_title
+      ? `<div class="text-warning" style="font-size:.8rem">${esc(ab.series_title)}${ab.series_sequence ? ' #'+ab.series_sequence : ''}</div>`
+      : '';
+
+    panel.innerHTML = `
+      <div class="mt-3 pt-3 border-top border-secondary">
+        <div class="d-flex gap-3 mb-3 align-items-start">
+          ${ab.cover_url
+            ? `<img src="${esc(ab.cover_url)}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;flex-shrink:0">`
+            : `<div class="d-flex align-items-center justify-content-center bg-dark" style="width:72px;height:72px;border-radius:6px;flex-shrink:0">
+                 <i class="bi bi-book-half text-secondary fs-3"></i>
+               </div>`}
+          <div>
+            ${series}
+            <div class="fw-semibold">${esc(ab.title)}</div>
+            <div class="text-secondary small">${esc(ab.author || '')}</div>
+            ${ab.narrator ? `<div class="text-secondary" style="font-size:.75rem">Narr: ${esc(ab.narrator)}</div>` : ''}
+            ${dur ? `<div class="text-secondary" style="font-size:.75rem">${esc(dur)}</div>` : ''}
+            ${ab.year  ? `<div class="text-secondary" style="font-size:.75rem">${ab.year}</div>` : ''}
+            ${ab.asin  ? `<div class="text-secondary" style="font-size:.75rem">ASIN: ${esc(ab.asin)}</div>` : ''}
+          </div>
+        </div>
+        <div class="text-secondary small mb-2 d-flex align-items-center gap-2">
+          <i class="bi bi-cloud-download"></i>Available on IPT
+        </div>
+        <div id="find-ab-torrents">
+          <div class="spinner-border spinner-border-sm text-secondary"></div>
+        </div>
+      </div>`;
+
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    // Search IPT for matching torrents
+    try {
+      const results = await API.get(`/iptorrents/search?q=${enc(ab.title)}&cat=audiobooks&limit=25`);
+      const el = document.getElementById('find-ab-torrents');
+      if (!el) return;
+      if (!results.length) {
+        el.innerHTML = '<div class="text-secondary small">No audiobook torrents found on IPT.</div>';
+        return;
+      }
+      el.innerHTML = `
+        <div class="table-responsive">
+          <table class="table table-dark table-sm table-hover mb-0">
+            <thead><tr class="text-secondary small">
+              <th>Release</th><th>Size</th><th>Seeds</th><th></th>
+            </tr></thead>
+            <tbody>${results.map(r => `
+              <tr>
+                <td style="max-width:340px">
+                  <div class="small text-truncate" title="${esc(r.title)}">${esc(r.title)}</div>
+                </td>
+                <td class="text-secondary text-nowrap small">${_humanSize(r.size_bytes)}</td>
+                <td class="text-secondary small">${r.seeders}</td>
+                <td>
+                  <button class="btn btn-warning btn-sm py-0 text-nowrap"
+                          onclick="FindPage._grabAudiobook(${jsStr(r.torrent_url)}, ${jsStr(r.title)})">
+                    <i class="bi bi-cloud-download me-1"></i>Grab
+                  </button>
+                </td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    } catch (e) {
+      const el = document.getElementById('find-ab-torrents');
+      if (el) el.innerHTML = `<div class="text-danger small">${esc(e.message)}</div>`;
+    }
+  },
+
+  async _grabAudiobook(torrentUrl, torrentTitle) {
+    const ab = this._abConfirmed;
+    if (!ab) return;
+    toast(`Grabbing ${torrentTitle.slice(0, 50)}…`, 'info');
+    try {
+      await API.post('/iptorrents/grab', {
+        torrent_url:        torrentUrl,
+        label:              window._iptTag || '',
+        title:              torrentTitle,
+        suggested_type:     'audiobooks',
+        ab_asin:            ab.asin             || '',
+        ab_title:           ab.title            || '',
+        ab_author:          ab.author           || '',
+        ab_narrator:        ab.narrator         || '',
+        ab_year:            ab.year             || null,
+        ab_cover_url:       ab.cover_url        || '',
+        ab_series_title:    ab.series_title     || '',
+        ab_series_sequence: ab.series_sequence  || '',
+        ab_duration_minutes: ab.duration_minutes || null,
+        ab_formatted_name:  ab.formatted_name   || ab.title || '',
+      });
+      toast('Added to rTorrent — will auto-move when downloaded', 'success');
+    } catch (e) {
+      if (e.status === 409 && e.detail?.conflict) {
+        _showSbxConflict(e.detail);
+        return;
+      }
+      toast(`Grab failed: ${e.message}`, 'danger');
+    }
   },
 
   // ── Switch game ──────────────────────────────────────────────────────────────

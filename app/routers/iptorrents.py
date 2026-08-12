@@ -368,8 +368,19 @@ class GrabRequest(BaseModel):
     label: str = ""           # rTorrent label; defaults to RTORRENT_TAG if blank
     force: bool = False       # skip duplicate check
     title: str = ""           # search result title — used for auto TMDB match
-    suggested_type: str = ""  # "movies" triggers auto-match
+    suggested_type: str = ""  # "movies" / "audiobooks" triggers auto-match
     imdb_id: str = ""         # if set, links the grab to a movie_searches record
+    # Audiobook-specific: carry Audible metadata so we can create an AudiobookMatch
+    ab_asin: str = ""
+    ab_title: str = ""
+    ab_author: str = ""
+    ab_narrator: str = ""
+    ab_year: int | None = None
+    ab_cover_url: str = ""
+    ab_series_title: str = ""
+    ab_series_sequence: str = ""
+    ab_duration_minutes: int | None = None
+    ab_formatted_name: str = ""
 
 
 @router.post("/grab", status_code=201)
@@ -464,6 +475,16 @@ def iptorrents_grab(req: GrabRequest, db: Session = Depends(get_db)):
                 db.close()
         threading.Thread(target=_link_movie, daemon=True).start()
 
+    # Auto-create AudiobookMatch when metadata was supplied with the grab
+    if req.suggested_type == "audiobooks" and req.ab_formatted_name:
+        def _do_ab_match():
+            try:
+                torrent_name = extract_torrent_name(torrent_bytes)
+            except Exception:
+                torrent_name = req.title.strip()
+            _ensure_audiobook_match(torrent_name, req)
+        threading.Thread(target=_do_ab_match, daemon=True).start()
+
     # Create MovieMatch so the auto-move works when the sync downloads the file.
     # Use the torrent's actual directory name (from .torrent metadata) — not the RSS
     # title, which may differ.  If imdb_id is known (from discover flow), create
@@ -532,3 +553,161 @@ def _ensure_movie_match_from_imdb(torrent_name: str, imdb_id: str) -> None:
         logger.warning(f"MovieMatch creation failed for '{torrent_name}': {exc}")
     finally:
         db.close()
+
+
+def _ensure_audiobook_match(torrent_name: str, req: GrabRequest) -> None:
+    """Create an AudiobookMatch immediately after a grab so the auto-move fires when the file lands."""
+    from ..database import SessionLocal
+    from ..models import AudiobookMatch
+
+    db = SessionLocal()
+    try:
+        existing = db.query(AudiobookMatch).filter(
+            AudiobookMatch.category == "audiobooks",
+            AudiobookMatch.item_name == torrent_name,
+        ).first()
+        if existing:
+            logger.info(f"AudiobookMatch already exists for '{torrent_name}'")
+            return
+
+        m = AudiobookMatch(
+            category="audiobooks",
+            item_name=torrent_name,
+            asin=req.ab_asin or None,
+            title=req.ab_title,
+            author=req.ab_author or None,
+            narrator=req.ab_narrator or None,
+            year=req.ab_year,
+            cover_url=req.ab_cover_url or None,
+            series_title=req.ab_series_title or None,
+            series_sequence=req.ab_series_sequence or None,
+            duration_minutes=req.ab_duration_minutes,
+            formatted_name=req.ab_formatted_name,
+        )
+        db.add(m)
+        db.commit()
+        logger.info(f"AudiobookMatch auto-created: '{torrent_name}' → '{req.ab_formatted_name}'")
+    except Exception as exc:
+        logger.warning(f"AudiobookMatch auto-creation failed for '{torrent_name}': {exc}")
+    finally:
+        db.close()
+
+
+# ── Browse Audiobooks ─────────────────────────────────────────────────────────
+
+import re as _ab_re
+
+_AB_TAGS_RE = _ab_re.compile(
+    r"\s*[\[\(](?:M4B|MP3|FLAC|AAC|Audiobook|Unabridged|Abridged|\d+\s*kbps|\d+\s*bit|"
+    r"WEB|RETAIL|CBR|VBR|Dolby|Atmos|MULTI\d*)\s*[\]\)]\s*",
+    _ab_re.IGNORECASE,
+)
+_AB_BY_RE = _ab_re.compile(r"\s+[Bb]y\s+")
+
+_ab_browse_cache: list | None = None
+_ab_browse_cache_at: float = 0.0
+
+
+def _parse_ab_torrent(name: str) -> tuple[str, str]:
+    """Return (title, author) from a raw audiobook torrent name."""
+    clean = _AB_TAGS_RE.sub(" ", name).strip()
+    # Common format: "Author Name - Book Title"
+    dash = clean.find(" - ")
+    if dash > 0:
+        candidate_author = clean[:dash].strip()
+        candidate_title  = clean[dash + 3:].strip()
+        # Author field should be reasonable: not too long, not starting with a digit
+        if candidate_title and 1 < len(candidate_author) <= 60 and not candidate_author[0].isdigit():
+            return candidate_title, candidate_author
+    # "Title by Author"
+    m = _AB_BY_RE.search(clean)
+    if m:
+        return clean[:m.start()].strip(), clean[m.end():].strip()
+    return clean, ""
+
+
+@router.get("/browse-audiobooks")
+def browse_audiobooks(limit: int = 20, offset: int = 0):
+    """
+    Recently uploaded audiobooks from IPT (cat 16), enriched with Audible metadata.
+    Cached for 5 minutes.
+    """
+    global _ab_browse_cache, _ab_browse_cache_at
+
+    now = time.monotonic()
+    if _ab_browse_cache is not None and (now - _ab_browse_cache_at) < _BROWSE_TTL:
+        page = _ab_browse_cache[offset:offset + limit]
+        return {"items": page, "total": len(_ab_browse_cache), "offset": offset}
+
+    if not _ipt.is_configured():
+        raise HTTPException(status_code=400, detail="IPTorrents not configured.")
+
+    try:
+        raw = _ipt.search(query="", category="audiobooks", limit=100)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # Group releases by cleaned title + author
+    groups: dict[str, dict] = {}
+    for r in raw:
+        title_clean, author_clean = _parse_ab_torrent(r.title)
+        if not title_clean:
+            continue
+        key = f"{title_clean.lower()}|{author_clean.lower()}"
+        if key not in groups:
+            groups[key] = {
+                "title":       title_clean,
+                "author":      author_clean,
+                "releases":    [],
+                "total_seeds": 0,
+            }
+        g = groups[key]
+        g["releases"].append(r)
+        g["total_seeds"] += r.seeders
+
+    unique = list(groups.values())
+
+    # Enrich with Audible metadata in parallel
+    from ..services.audiobooks import search_audible
+
+    def _enrich_ab(idx: int, g: dict):
+        try:
+            results = search_audible(g["title"], g["author"])
+            if results:
+                return (idx, {**g, "audible": results[0]})
+        except Exception:
+            pass
+        return (idx, {**g, "audible": None})
+
+    enriched: list[tuple[int, dict]] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(_enrich_ab, i, g) for i, g in enumerate(unique)]
+        for f in as_completed(futures):
+            enriched.append(f.result())
+
+    enriched.sort(key=lambda pair: pair[0])
+    enriched = [e for _, e in enriched]
+
+    result = []
+    for e in enriched:
+        ab = e.get("audible") or {}
+        result.append({
+            "title":            ab.get("title")           or e["title"],
+            "author":           ab.get("author")          or e["author"],
+            "asin":             ab.get("asin"),
+            "cover_url":        ab.get("cover_url"),
+            "year":             ab.get("year"),
+            "narrator":         ab.get("narrator"),
+            "series_title":     ab.get("series_title"),
+            "series_sequence":  ab.get("series_sequence"),
+            "duration_minutes": ab.get("duration_minutes"),
+            "formatted_name":   ab.get("formatted_name") or e["title"],
+            "total_seeds":      e["total_seeds"],
+            "release_count":    len(e["releases"]),
+        })
+
+    _ab_browse_cache    = result
+    _ab_browse_cache_at = now
+    logger.info(f"IPT browse-audiobooks: {len(result)} unique titles from {len(raw)} releases")
+    page = result[offset:offset + limit]
+    return {"items": page, "total": len(result), "offset": offset}
