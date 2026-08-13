@@ -3,7 +3,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .database import Base, engine
@@ -56,13 +56,26 @@ app.include_router(switch.router, prefix="/api")
 
 app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 
+_INDEX = os.path.join(_STATIC, "index.html")
+_APPJS = os.path.join(_STATIC, "js", "app.js")
+
+
+def _index_html() -> HTMLResponse:
+    """Serve index.html with the app.js mtime as a cache-buster query string."""
+    try:
+        v = int(os.path.getmtime(_APPJS))
+    except OSError:
+        v = 0
+    html = open(_INDEX).read().replace("__APP_VERSION__", str(v))
+    return HTMLResponse(html)
+
 
 @app.get("/")
 async def root():
-    return FileResponse(os.path.join(_STATIC, "index.html"))
+    return _index_html()
 
 
 @app.get("/{full_path:path}")
 async def spa_fallback(full_path: str):
     # API routes are matched first; anything else serves the SPA shell
-    return FileResponse(os.path.join(_STATIC, "index.html"))
+    return _index_html()

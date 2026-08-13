@@ -24,21 +24,28 @@ _RESPONSE_GROUPS = "product_desc,contributors,product_attrs,series,media"
 
 def search_audible(title: str, author: str = "") -> list[dict]:
     """
-    Search the Audible catalog by title (+ optional author).
-    Returns candidate dicts; narrator/duration already included from the catalog response.
+    Search the Audible catalog by title and/or author.
+    When only an author is given, falls back to a keyword search so author-only
+    queries return results.
     """
     params: dict[str, str] = {
         "num_results": "25",
         "products_sort_by": "Relevance",
         "response_groups": _RESPONSE_GROUPS,
-        "title": title,
     }
-    if author:
-        params["author"] = author
+    if title:
+        params["title"] = title
+        if author:
+            params["author"] = author
+    elif author:
+        # Author-only: use keywords for a broader search
+        params["keywords"] = author
+    else:
+        return []
     try:
         data = _audible_get("/catalog/products", params)
     except Exception as exc:
-        logger.warning(f"Audible search failed for '{title}': {exc}")
+        logger.warning(f"Audible search failed title={title!r} author={author!r}: {exc}")
         return []
     return [_parse_product(p) for p in data.get("products", [])]
 

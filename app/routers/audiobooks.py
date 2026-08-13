@@ -44,10 +44,12 @@ class MatchRequest(BaseModel):
 
 @router.get("/search")
 def search_audiobooks(
-    q: str = Query(..., min_length=1),
+    q: str = Query(""),
     author: str = Query(""),
 ):
     """Audible catalog search — returns candidate list for the confirm step."""
+    if not q and not author:
+        raise HTTPException(status_code=400, detail="Provide q (title) and/or author.")
     try:
         return search_audible(q, author)
     except RuntimeError as exc:
@@ -145,6 +147,58 @@ def delete_match(
     db.delete(match)
     db.commit()
     return {"deleted": True}
+
+
+@router.get("/presence-check")
+def presence_check(
+    title: str = Query(..., min_length=1),
+    author: str = Query(""),
+):
+    """
+    Check whether a book exists in the local library and/or on the seedbox.
+    Returns {library: {found, match}, seedbox: {found, match, error}}.
+    """
+    needle = _norm(title)
+
+    # ── Library scan ──────────────────────────────────────────────────────────
+    library_dir = os.path.join(settings.media_dir, "audiobooks")
+    lib_found, lib_match = False, None
+    try:
+        for entry in os.scandir(library_dir):
+            if _norm(entry.name).find(needle) != -1:
+                lib_found, lib_match = True, entry.name
+                break
+    except OSError:
+        pass
+
+    # ── Seedbox scan via rTorrent ─────────────────────────────────────────────
+    sbx_found, sbx_match, sbx_error = False, None, None
+    try:
+        from ..services.sources.rtorrent import RtorrentSource
+        rt = RtorrentSource()
+        if rt.is_configured():
+            torrents = rt.list_all_brief()
+            for info in torrents.values():
+                name = info.get("name", "")
+                if _norm(name).find(needle) != -1:
+                    sbx_found, sbx_match = True, name
+                    break
+        else:
+            sbx_error = "Not configured"
+    except Exception as exc:
+        sbx_error = str(exc)
+
+    return {
+        "library": {"found": lib_found, "match": lib_match},
+        "seedbox": {"found": sbx_found, "match": sbx_match, "error": sbx_error},
+    }
+
+
+def _norm(s: str) -> str:
+    """Lowercase, strip punctuation and extra spaces for fuzzy matching."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9 ]", " ", s.lower()).strip()
 
 
 def _detect_asin(category: str, item_name: str) -> str | None:

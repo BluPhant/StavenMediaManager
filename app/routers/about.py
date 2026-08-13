@@ -107,6 +107,19 @@ def _check_igdb() -> dict:
         return {"ok": False, "configured": True, "detail": str(exc)}
 
 
+def _check_audible() -> dict:
+    try:
+        import urllib.parse
+        url = "https://api.audible.com/1.0/catalog/products?title=test&num_results=1&response_groups=product_desc"
+        req = urllib.request.Request(url, headers={"User-Agent": "StavenMediaManager/1.0"})
+        t0 = time.monotonic()
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            ms = int((time.monotonic() - t0) * 1000)
+        return {"ok": True, "configured": True, "detail": "Catalog reachable", "ms": ms}
+    except Exception as exc:
+        return {"ok": False, "configured": True, "detail": str(exc)}
+
+
 def _check_discogs() -> dict:
     from ..services.discogs import DiscogsClient
     client = DiscogsClient()
@@ -136,6 +149,7 @@ _CHECKS = {
     "btn":        _check_btn,
     "igdb":       _check_igdb,
     "discogs":    _check_discogs,
+    "audible":    _check_audible,
 }
 
 

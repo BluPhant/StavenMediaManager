@@ -152,8 +152,10 @@ def confirm_movie(req: ConfirmRequest, db: Session = Depends(get_db)):
         and plex_rank < _res_rank(ipt_info["best"].get("resolution", ""))
     )
 
-    # 4. Upsert movie_searches record
+    # 4. Upsert movie_searches record, then read back queued flag
     _upsert_movie_search(db, details, plex_info, sbx_info, ipt_info, status)
+    db.expire_all()
+    movie_row = db.query(MovieSearch).filter(MovieSearch.imdb_id == imdb_id).first()
 
     return {
         **details,
@@ -162,6 +164,7 @@ def confirm_movie(req: ConfirmRequest, db: Session = Depends(get_db)):
         "ipt":              ipt_info,
         "status":           status,
         "upgrade_available": upgrade_available,
+        "queued":           bool(movie_row.queued) if movie_row else False,
     }
 
 

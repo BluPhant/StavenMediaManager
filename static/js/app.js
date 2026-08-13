@@ -2553,11 +2553,11 @@ const MovieDiscover = {
     if (!this._confirmed?.imdb_id) return;
     try {
       await API.post(`/movies/queue/${enc(this._confirmed.imdb_id)}`, { min_resolution: '2160p' });
-      // Navigate home and show Jobs so user can watch the immediate check run
-      Router.go('/');
-      await Router.route();
-      JobsPanel.open();
-      JobsPanel.refresh();
+      this._confirmed.queued = true;
+      // Re-render just the IPT section so the button flips to "Watching" in place
+      const iptSection = document.getElementById('movie-ipt-section');
+      if (iptSection) iptSection.innerHTML = this._buildIptSection(this._confirmed);
+      toast(`Watching for ${this._confirmed.title}`, 'success');
     } catch (e) {
       toast(`Queue failed: ${e.message}`, 'danger');
     }
@@ -2645,19 +2645,33 @@ const MovieDiscover = {
          </div>`
       : '';
 
+    const watchBtn = d.queued
+      ? `<span class="badge bg-warning text-dark ms-2"><i class="bi bi-clock-fill me-1"></i>Watching</span>`
+      : `<button class="btn btn-sm btn-outline-secondary ms-2 py-0"
+                 onclick="MovieDiscover._queueThis()">
+           <i class="bi bi-clock me-1"></i>Watch for it
+         </button>`;
+
     const titleMatchBanner = ipt.search_method === 'title'
-      ? `<div class="alert alert-warning py-2 small mb-2 d-flex align-items-center gap-2">
-           <i class="bi bi-exclamation-triangle-fill flex-shrink-0"></i>
-           <span>
-             <strong>Title match only</strong> — IPT has no IMDB ID indexed for this torrent.
-             Results are matched by title and may not be the correct film.
-             ${d.imdb_id
-               ? `<a href="https://www.imdb.com/title/${esc(d.imdb_id)}/" target="_blank"
-                     rel="noopener" class="ms-1 text-warning">
-                    Verify on IMDB <i class="bi bi-box-arrow-up-right" style="font-size:.7rem"></i>
-                  </a>`
-               : ''}
-           </span>
+      ? `<div class="alert alert-warning py-2 small mb-2">
+           <div class="d-flex align-items-center gap-2 mb-1">
+             <i class="bi bi-exclamation-triangle-fill flex-shrink-0"></i>
+             <span>
+               <strong>Title match only</strong> — IPT has no IMDB ID indexed for these torrents.
+               Results may not be the correct film.
+               ${d.imdb_id
+                 ? `<a href="https://www.imdb.com/title/${esc(d.imdb_id)}/" target="_blank"
+                       rel="noopener" class="ms-1 text-warning">
+                      Verify on IMDB <i class="bi bi-box-arrow-up-right" style="font-size:.7rem"></i>
+                    </a>`
+                 : ''}
+             </span>
+           </div>
+           <div>
+             <span class="text-body-secondary">None of these the right copy?</span>
+             ${watchBtn}
+             ${d.queued ? '— auto-grabs when a matched torrent appears.' : '— queues by IMDB ID and auto-grabs when a matched torrent appears.'}
+           </div>
          </div>`
       : '';
 
@@ -2667,25 +2681,31 @@ const MovieDiscover = {
            <button class="btn btn-link btn-sm p-0 ms-1" onclick="MovieDiscover._toggleAllQualities()">
              Show all qualities
            </button>`
-        : `Not found on IPT.
-           <button class="btn btn-sm btn-outline-secondary ms-2" onclick="MovieDiscover._queueThis()">
-             <i class="bi bi-clock me-1"></i>Watch for it
-           </button>`;
+        : `Not found on IPT. ${watchBtn}`;
       return `<div class="mt-3 text-secondary small">${titleMatchBanner}${filterBanner}${noMsg}</div>`;
     }
 
+    const movieYear = d.year ? parseInt(d.year, 10) : null;
     const rows = results.map((r, idx) => {
-      const isBest  = idx === 0 && !showAll || r.torrent_id === ipt.best?.torrent_id;
+      // Flag if the year in the filename pre-dates the movie's release year — likely a different film.
+      const titleYearM = r.title.match(/\b((?:19|20)\d{2})\b/);
+      const titleYear  = titleYearM ? parseInt(titleYearM[1], 10) : null;
+      const yearMismatch = movieYear && titleYear && titleYear < movieYear;
+
+      const isBest  = !yearMismatch && (idx === 0 && !showAll || r.torrent_id === ipt.best?.torrent_id);
       const bestTag = isBest && idx === 0
         ? `<span class="badge bg-success me-1" style="font-size:.65rem">Best Pick</span>`
         : '';
       const title = r.title.length > 55 ? r.title.slice(0, 55) + '…' : r.title;
+
       return `
-        <tr class="${isBest && idx === 0 ? 'table-success' : ''}">
-          <td class="text-nowrap">${bestTag}${_resBadge(r.resolution)}</td>
+        <tr class="${isBest && idx === 0 ? 'table-success' : ''}${yearMismatch ? ' text-secondary opacity-50' : ''}">
+          <td class="text-nowrap">${yearMismatch ? '' : bestTag}${_resBadge(r.resolution)}</td>
           <td class="small" style="max-width:260px">
-            <div class="text-truncate" title="${esc(r.title)}">${esc(title)}</div>
-            <div class="text-secondary" style="font-size:.7rem">${esc(r.ipt_category||'')}</div>
+            <div class="text-truncate" title="${esc(r.title)}">${esc(title)}
+              ${yearMismatch ? `<span class="ms-1" style="font-size:.65rem" title="Torrent year ${titleYear} pre-dates movie release ${movieYear} — likely a different film">· ${titleYear}</span>` : ''}
+            </div>
+            <div style="font-size:.7rem">${esc(r.ipt_category||'')}</div>
           </td>
           <td class="text-nowrap small">
             ${_humanSize(r.size_bytes)}
@@ -2707,12 +2727,19 @@ const MovieDiscover = {
          </span>`
       : '';
 
+    const sectionHeader = ipt.search_method === 'title'
+      ? `<div class="text-secondary small mb-2 d-flex align-items-center gap-2">
+           <i class="bi bi-question-circle"></i>
+           <span>Possible title matches — not confirmed</span>${runtime}
+         </div>`
+      : `<div class="text-secondary small fw-semibold mb-2 text-uppercase d-flex align-items-center gap-2"
+              style="letter-spacing:.05em">
+           <span>Available on IPT</span>${runtime}
+         </div>`;
+
     return `
       <div class="mt-3">
-        <div class="text-secondary small fw-semibold mb-2 text-uppercase d-flex align-items-center gap-2"
-             style="letter-spacing:.05em">
-          <span>Available on IPT</span>${runtime}
-        </div>
+        ${sectionHeader}
         ${titleMatchBanner}${filterBanner}
         <div class="table-responsive">
           <table class="table table-dark table-hover table-sm align-middle mb-0">
@@ -2744,14 +2771,13 @@ const MovieDiscover = {
       return MovieDiscover._renderIptTable(d, this._showAllQualities);
     }
     if (d.ipt?.configured) {
-      return `
-        <div class="mt-3 text-secondary small">
-          Not found on IPT.
-          <button class="btn btn-sm btn-outline-secondary ms-2"
-                  onclick="MovieDiscover._queueThis()">
-            <i class="bi bi-clock me-1"></i>Watch for it
-          </button>
-        </div>`;
+      const watchBtn2 = d.queued
+        ? `<span class="badge bg-warning text-dark ms-2"><i class="bi bi-clock-fill me-1"></i>Watching</span>`
+        : `<button class="btn btn-sm btn-outline-secondary ms-2"
+                   onclick="MovieDiscover._queueThis()">
+             <i class="bi bi-clock me-1"></i>Watch for it
+           </button>`;
+      return `<div class="mt-3 text-secondary small">Not found on IPT. ${watchBtn2}</div>`;
     }
     return '';
   },
@@ -3059,6 +3085,7 @@ const AboutPage = {
       btn:        { label: 'BTN',         icon: 'bi-broadcast',      color: '#a78bfa' },
       igdb:       { label: 'IGDB',        icon: 'bi-joystick',       color: '#9147ff' },
       discogs:    { label: 'Discogs',     icon: 'bi-music-note-beamed', color: '#333333' },
+      audible:    { label: 'Audible',     icon: 'bi-book-half',      color: '#f5851f' },
     };
 
     const cards = Object.entries(SERVICE_META).map(([key, meta]) => {
@@ -3708,9 +3735,13 @@ const FindPage = {
 
   // ── Audiobook ────────────────────────────────────────────────────────────────
   _abConfirmed: null,
+  _abBrowseItems: [],
+  _abSearchItems: [],
 
   _audiobookPanel(panel) {
     this._abConfirmed = null;
+    this._abBrowseItems = [];
+    this._abSearchItems = [];
     panel.innerHTML = `
       <div class="d-flex gap-2 mb-3 flex-wrap">
         <input id="find-ab-title" type="text" class="form-control" placeholder="Title…"
@@ -3743,13 +3774,14 @@ const FindPage = {
       const data  = await API.get('/iptorrents/browse-audiobooks?limit=18');
       const items = data.items || [];
       if (!items.length) { el.innerHTML = '<div class="col-12 text-secondary small">Nothing loaded.</div>'; return; }
+      this._abBrowseItems = items;
       el.innerHTML = items.map((ab, i) => {
         const dur = ab.duration_minutes
           ? `${Math.floor(ab.duration_minutes / 60)}h ${ab.duration_minutes % 60}m`
           : '';
         return `
           <div class="col-6 col-md-4 col-lg-3 col-xl-2">
-            <div class="card h-100 match-result-card" onclick="FindPage._audiobookConfirm(${jsStr(JSON.stringify(ab))})">
+            <div class="card h-100 match-result-card" onclick="FindPage._audiobookConfirmIdx('browse',${i})">
               ${ab.cover_url
                 ? `<img src="${esc(ab.cover_url)}" class="card-img-top" style="aspect-ratio:1/1;object-fit:cover" loading="lazy">`
                 : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark" style="aspect-ratio:1/1">
@@ -3772,29 +3804,54 @@ const FindPage = {
     }
   },
 
+  _abNorm(s) {
+    return (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  },
+
+  _abIptMatch(audibleTitle, iptTorrents) {
+    const needle = this._abNorm(audibleTitle);
+    return iptTorrents.filter(t => this._abNorm(t.title).includes(needle));
+  },
+
   async _audiobookSearch() {
     const title  = (document.getElementById('find-ab-title')?.value  || '').trim();
     const author = (document.getElementById('find-ab-author')?.value || '').trim();
-    if (!title) return;
+    if (!title && !author) return;
     const res = document.getElementById('find-ab-results');
     res.innerHTML = '<div class="spinner-border spinner-border-sm text-secondary"></div>';
     try {
-      const results = await API.get(`/audiobooks/search?q=${enc(title)}${author ? '&author=' + enc(author) : ''}`);
+      const iptQuery = title || author;
+      const [results, iptRaw] = await Promise.all([
+        API.get(`/audiobooks/search?q=${enc(title)}${author ? '&author=' + enc(author) : ''}`),
+        API.get(`/iptorrents/search?q=${enc(iptQuery)}&cat=audiobooks&limit=50`).catch(() => []),
+      ]);
       if (!results.length) { res.innerHTML = '<div class="text-secondary small">No results on Audible.</div>'; return; }
-      res.innerHTML = `<div class="row g-2">${results.map(r => {
+
+      // Attach matching IPT torrents to each result and sort by availability
+      const enriched = results.map(r => ({
+        ...r, _iptTorrents: this._abIptMatch(r.title, iptRaw),
+      }));
+      enriched.sort((a, b) => (b._iptTorrents.length > 0 ? 1 : 0) - (a._iptTorrents.length > 0 ? 1 : 0));
+
+      this._abSearchItems = enriched;
+      res.innerHTML = `<div class="row g-2">${enriched.map((r, i) => {
         const dur    = r.duration_minutes ? `${Math.floor(r.duration_minutes/60)}h ${r.duration_minutes%60}m` : '';
         const series = r.series_title
           ? `<div class="text-warning" style="font-size:.68rem">${esc(r.series_title)}${r.series_sequence ? ' #'+r.series_sequence : ''}</div>`
           : '';
+        const onIpt  = r._iptTorrents.length > 0;
         return `
           <div class="col-6 col-md-4 col-lg-3">
-            <div class="card border-secondary match-result-card h-100"
-                 onclick="FindPage._audiobookConfirm(${jsStr(JSON.stringify(r))})">
-              ${r.cover_url
-                ? `<img src="${esc(r.cover_url)}" class="card-img-top" style="aspect-ratio:1/1;object-fit:cover" loading="lazy">`
-                : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark" style="aspect-ratio:1/1">
-                     <i class="bi bi-book-half text-secondary" style="font-size:2rem"></i>
-                   </div>`}
+            <div class="card ${onIpt ? 'border-warning' : 'border-secondary'} match-result-card h-100"
+                 onclick="FindPage._audiobookConfirmIdx('search',${i})">
+              <div style="position:relative">
+                ${r.cover_url
+                  ? `<img src="${esc(r.cover_url)}" class="card-img-top" style="aspect-ratio:1/1;object-fit:cover" loading="lazy">`
+                  : `<div class="card-img-top d-flex align-items-center justify-content-center bg-dark" style="aspect-ratio:1/1">
+                       <i class="bi bi-book-half text-secondary" style="font-size:2rem"></i>
+                     </div>`}
+                ${onIpt ? `<span class="badge bg-warning text-dark" style="position:absolute;top:4px;right:4px;font-size:.6rem">On IPT</span>` : ''}
+              </div>
               <div class="card-body p-2">
                 ${series}
                 <div class="small fw-semibold lh-sm">${esc(r.title)}</div>
@@ -3807,7 +3864,14 @@ const FindPage = {
       }).join('')}</div>`;
     } catch (e) {
       res.innerHTML = `<div class="text-danger small">${esc(e.message)}</div>`;
+      toast(`Search error: ${e.message}`, 'danger');
     }
+  },
+
+  _audiobookConfirmIdx(source, i) {
+    const ab = source === 'browse' ? this._abBrowseItems[i] : this._abSearchItems[i];
+    if (!ab) { toast('Card data missing — try refreshing.', 'warning'); return; }
+    this._audiobookConfirm(ab);
   },
 
   async _audiobookConfirm(ab) {
@@ -3838,8 +3902,9 @@ const FindPage = {
             ${ab.asin  ? `<div class="text-secondary" style="font-size:.75rem">ASIN: ${esc(ab.asin)}</div>` : ''}
           </div>
         </div>
-        <div class="text-secondary small mb-2 d-flex align-items-center gap-2">
-          <i class="bi bi-cloud-download"></i>Available on IPT
+        <div id="find-ab-presence" class="mb-2">
+          <span class="spinner-border spinner-border-sm text-secondary me-1"></span>
+          <span class="text-secondary small">Checking library &amp; seedbox…</span>
         </div>
         <div id="find-ab-torrents">
           <div class="spinner-border spinner-border-sm text-secondary"></div>
@@ -3848,16 +3913,24 @@ const FindPage = {
 
     panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    // Search IPT for matching torrents
+    // Run presence check and torrent search in parallel
+    this._audiobookPresenceCheck(ab);
+
+    // Use cached torrent list from search, or fetch fresh if opened from browse
     try {
-      const results = await API.get(`/iptorrents/search?q=${enc(ab.title)}&cat=audiobooks&limit=25`);
+      const results = ab._iptTorrents?.length
+        ? ab._iptTorrents
+        : await API.get(`/iptorrents/search?q=${enc(ab.title)}&cat=audiobooks&limit=25`);
       const el = document.getElementById('find-ab-torrents');
       if (!el) return;
       if (!results.length) {
-        el.innerHTML = '<div class="text-secondary small">No audiobook torrents found on IPT.</div>';
+        el.innerHTML = '<div class="text-secondary small">Not on IPT yet.</div>';
         return;
       }
       el.innerHTML = `
+        <div class="text-secondary small mb-2 d-flex align-items-center gap-2">
+          <i class="bi bi-cloud-download"></i>Available on IPT
+        </div>
         <div class="table-responsive">
           <table class="table table-dark table-sm table-hover mb-0">
             <thead><tr class="text-secondary small">
@@ -3883,6 +3956,36 @@ const FindPage = {
     } catch (e) {
       const el = document.getElementById('find-ab-torrents');
       if (el) el.innerHTML = `<div class="text-danger small">${esc(e.message)}</div>`;
+    }
+  },
+
+  async _audiobookPresenceCheck(ab) {
+    const el = document.getElementById('find-ab-presence');
+    if (!el) return;
+    try {
+      const url = `/audiobooks/presence-check?title=${enc(ab.title)}${ab.author ? '&author=' + enc(ab.author) : ''}`;
+      const d = await API.get(url);
+
+      const _row = (icon, color, label, match) => `
+        <span class="d-inline-flex align-items-center gap-1 me-3" style="font-size:.75rem">
+          <i class="bi ${icon}" style="color:${color}"></i>
+          <span class="${match ? 'text-warning' : 'text-secondary'}">${label}</span>
+          ${match ? `<span class="text-secondary" style="font-size:.68rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(match)}">${esc(match)}</span>` : ''}
+        </span>`;
+
+      const libIcon  = d.library.found  ? 'bi-check-circle-fill' : 'bi-circle';
+      const libColor = d.library.found  ? '#ffc107' : '#6c757d';
+      const sbxIcon  = d.seedbox.found  ? 'bi-check-circle-fill'
+                     : d.seedbox.error  ? 'bi-exclamation-circle' : 'bi-circle';
+      const sbxColor = d.seedbox.found  ? '#ffc107'
+                     : d.seedbox.error  ? '#dc3545' : '#6c757d';
+
+      el.innerHTML = `<div class="d-flex flex-wrap align-items-center mb-2">
+        ${_row(libIcon, libColor, 'Library', d.library.match)}
+        ${_row(sbxIcon, sbxColor, 'Seedbox', d.seedbox.match || (d.seedbox.error && !d.seedbox.found ? null : null))}
+      </div>`;
+    } catch (e) {
+      if (el) el.innerHTML = '';
     }
   },
 
@@ -4152,6 +4255,19 @@ function toast(msg, type = 'info') {
   new bootstrap.Toast(el, { delay: 4500 }).show();
   el.addEventListener('hidden.bs.toast', () => el.remove());
 }
+
+// ─────────────────────────────────────────────
+// Global error toasts (debug visibility)
+// ─────────────────────────────────────────────
+window.onerror = function (msg, src, line) {
+  const loc = src ? ` (${src.split('/').pop()}:${line})` : '';
+  toast(`JS error: ${msg}${loc}`, 'danger');
+  return false; // don't suppress default logging
+};
+window.addEventListener('unhandledrejection', e => {
+  const msg = e.reason?.message || String(e.reason);
+  toast(`Unhandled promise: ${msg}`, 'danger');
+});
 
 // ─────────────────────────────────────────────
 // Boot

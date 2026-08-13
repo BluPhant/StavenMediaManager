@@ -9,13 +9,17 @@ A personal home-media management tool I built for my own Unraid setup and am mak
 ## What it does
 
 - **Movie discovery** — Search by title; candidate cards show lazy-loaded Plex status badges (🟢 2160p · 🟡 1080p · 🔴 720p). Select a movie and the app checks Plex, your seedbox, and IPTorrents simultaneously using the IMDB ID as the single key. Results are scored by quality tier, file size fit (~15 GB ideal for a 2-hour 2160p film), source type, and seed count — with CAM/TS/Screener releases excluded. If the movie is already in your library below 2160p, only upgrade-quality results are shown. Grabbing or queuing a movie navigates to the home screen with the Jobs panel open.
+- **Movie year-mismatch flagging** — Torrents whose filename encodes a year older than the movie's TMDB release year are shown at 50% opacity with an inline note and excluded from Best Pick. Useful for catching uploads that clearly pre-date the film (wrong movie, mislabeled, etc.).
+- **"Watch for it" / "Watching" toggle** — When only title-only IPT matches exist and none are correct, a Watch for it button queues the movie for background re-checks without navigating away. The button updates in-place to Watching once queued, and a banner confirms the movie is on the watch list.
 - **Upgrade reviews** — When a better copy replaces an existing one, the old file moves to `.trash/`. A Pending Review card shows old vs new side-by-side (filename, size, resolution) with Confirm (delete old) or Revert (restore old) actions. A nav badge tracks pending reviews.
 - **Watching queue** — Add movies that aren't on IPT yet. An immediate check job fires on queue; a background scheduler re-checks every 4 hours and auto-grabs when a copy at your minimum quality appears.
 - **Search history** — Every confirmed movie search is recorded with Plex/seedbox/IPT status cached. One-click refresh re-runs all checks live.
+- **Audiobook Find** — Dedicated audiobook search in the Find page. Search by title, author, or both. Results pull from Audible/Audnexus and are cross-referenced against IPT audiobook torrents in parallel; IPT-available books are highlighted and sorted first. Selecting a result shows a presence check against your local library folder and the seedbox before confirming.
 - **Seedbox sync** — Polls an rTorrent seedbox for completed torrents tagged with a label, downloads them over FTPS (parallel byte-range segments), and moves them into the local media library.
 - **TV / general search** — Search IPTorrents (TV, music, audiobooks, games, etc.) or BroadcasTheNet for TV. Grab and load directly into rTorrent.
 - **Plex integration** — Full library scan with IMDB ID and resolution data, 60-second cache, targeted path refresh after every move.
 - **Job tracking** — All jobs (sync, move, extract, queue-check, upgrade-check) are tracked in SQLite with live progress in the UI.
+- **System health** — About page runs live checks against all connected services (Plex, rTorrent, IPTorrents, BTN, TMDB, Audible) and reports latency or error detail.
 
 ---
 
