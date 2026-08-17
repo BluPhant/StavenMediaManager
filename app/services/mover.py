@@ -365,18 +365,28 @@ def _update_review_new_file(review_id: int, dest_dir: str) -> None:
 
 
 def _fix_permissions(directory: str) -> None:
-    """Set 755 on dirs and 644 on files so Plex and other processes can access them."""
+    """Set nobody:users 755/644 ownership so Plex and other processes can access moved files."""
+    _UID = 99   # nobody
+    _GID = 100  # users
     try:
         os.chmod(directory, 0o755)
+        try:
+            os.chown(directory, _UID, _GID)
+        except OSError:
+            pass
         for root, dirs, files in os.walk(directory):
             for d in dirs:
+                p = os.path.join(root, d)
                 try:
-                    os.chmod(os.path.join(root, d), 0o755)
+                    os.chmod(p, 0o755)
+                    os.chown(p, _UID, _GID)
                 except OSError:
                     pass
             for f in files:
+                p = os.path.join(root, f)
                 try:
-                    os.chmod(os.path.join(root, f), 0o644)
+                    os.chmod(p, 0o644)
+                    os.chown(p, _UID, _GID)
                 except OSError:
                     pass
     except Exception as exc:
