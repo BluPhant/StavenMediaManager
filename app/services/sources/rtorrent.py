@@ -377,7 +377,7 @@ class RtorrentSource(BaseSource):
         if settings.rtorrent_user:
             parsed = urlparse(url)
             auth_netloc = (
-                f"{settings.rtorrent_user}:{settings.rtorrent_pass}"
+                f"{quote(settings.rtorrent_user, safe='')}:{quote(settings.rtorrent_pass, safe='')}"
                 f"@{parsed.hostname}"
             )
             if parsed.port:
