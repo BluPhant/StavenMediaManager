@@ -237,7 +237,7 @@ def _curl_base() -> list[str]:
         "curl",
         "--ftp-ssl",           # FTPS (AUTH TLS on control + data channel)
         "-k",                  # skip cert verification (seedbox self-signed)
-        "--user", f"{settings.rtorrent_user}:{settings.rtorrent_pass}",
+        "--user", f"{settings.rtorrent_user}:{settings.rtorrent_ssh_pass or settings.rtorrent_pass}",
         "--ftp-pasv",          # passive mode
         "--retry", "3",
         "--retry-delay", "5",
