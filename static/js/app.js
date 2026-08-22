@@ -114,7 +114,7 @@ const Views = {
     }
 
     const processed = history.filter(j => ['move', 'music_import'].includes(j.type));
-    const hasSeedbox = !!(syncStatus?.rtorrent?.configured);
+    const hasSeedbox = !!(syncStatus?.active);
 
     let active = [];
     if (hasSeedbox) {
@@ -163,7 +163,10 @@ const Views = {
     // ── Seedbox card ─────────────────────────────────────────────────────────
     let seedboxHtml = '';
     if (hasSeedbox) {
-      const rt = syncStatus.rtorrent;
+      const activeType = syncStatus.active;
+      const src = syncStatus[activeType] || {};
+      const categoryLabel = src.category || src.tag || '';
+      const sshHost = src.ssh_host || '';
       let progressHtml = '';
       if (active.length) {
         const bars = active.map(t => {
@@ -199,8 +202,9 @@ const Views = {
             <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
               <div class="small d-flex align-items-center gap-2">
                 <span class="text-success" style="font-size:.6rem">&#9679;</span>
-                <span class="text-secondary">tag: <code class="text-info">${esc(rt.tag)}</code></span>
-                ${rt.ssh_host ? `<span class="text-secondary" style="font-size:.8rem">${esc(rt.ssh_host)}</span>` : ''}
+                <span class="text-secondary text-capitalize">${esc(activeType)}</span>
+                ${categoryLabel ? `<span class="text-secondary">category: <code class="text-info">${esc(categoryLabel)}</code></span>` : ''}
+                ${sshHost ? `<span class="text-secondary" style="font-size:.8rem">${esc(sshHost)}</span>` : ''}
               </div>
               <div class="d-flex gap-2">
                 <button class="btn btn-sm btn-outline-info" onclick="Actions.sync()">
@@ -3078,14 +3082,15 @@ const AboutPage = {
 
     // ── Connection check cards ────────────────────────────────────────────────
     const SERVICE_META = {
-      plex:       { label: 'Plex',        icon: 'bi-display',        color: '#e5a00d' },
-      rtorrent:   { label: 'rTorrent',    icon: 'bi-cloud-download', color: '#6ea8fe' },
-      iptorrents: { label: 'IPTorrents',  icon: 'bi-database',       color: '#20c997' },
-      tmdb:       { label: 'TMDB',        icon: 'bi-film',           color: '#01b4e4' },
-      btn:        { label: 'BTN',         icon: 'bi-broadcast',      color: '#a78bfa' },
-      igdb:       { label: 'IGDB',        icon: 'bi-joystick',       color: '#9147ff' },
-      discogs:    { label: 'Discogs',     icon: 'bi-music-note-beamed', color: '#333333' },
-      audible:    { label: 'Audible',     icon: 'bi-book-half',      color: '#f5851f' },
+      plex:         { label: 'Plex',         icon: 'bi-display',           color: '#e5a00d' },
+      qbittorrent:  { label: 'qBittorrent',  icon: 'bi-cloud-download',    color: '#6ea8fe' },
+      rtorrent:     { label: 'rTorrent',     icon: 'bi-cloud-download',    color: '#6ea8fe' },
+      iptorrents:   { label: 'IPTorrents',   icon: 'bi-database',          color: '#20c997' },
+      tmdb:         { label: 'TMDB',         icon: 'bi-film',              color: '#01b4e4' },
+      btn:          { label: 'BTN',          icon: 'bi-broadcast',         color: '#a78bfa' },
+      igdb:         { label: 'IGDB',         icon: 'bi-joystick',          color: '#9147ff' },
+      discogs:      { label: 'Discogs',      icon: 'bi-music-note-beamed', color: '#333333' },
+      audible:      { label: 'Audible',      icon: 'bi-book-half',         color: '#f5851f' },
     };
 
     const cards = Object.entries(SERVICE_META).map(([key, meta]) => {
@@ -4283,6 +4288,6 @@ window.addEventListener('load', async () => {
   // Pre-fetch IPT status so grab() knows the configured sync tag
   try {
     const st = await API.get('/iptorrents/status');
-    window._iptTag = (st.rtorrent?.configured) ? '' : '';
+    window._iptTag = (st.seedbox?.configured) ? '' : '';
   } catch (_) {}
 });
