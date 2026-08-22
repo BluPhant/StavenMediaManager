@@ -3099,6 +3099,9 @@ const AboutPage = {
       if (!chk.configured) {
         dot        = `<span style="color:#6c757d;font-size:1.1rem">&#9679;</span>`;
         statusText = `<span class="text-secondary">Not configured</span>`;
+      } else if (chk.inactive) {
+        dot        = `<span style="color:#6c757d;font-size:1.1rem">&#9679;</span>`;
+        statusText = `<span class="text-secondary">${esc(chk.detail || 'Inactive')}</span>`;
       } else if (chk.ok) {
         dot        = `<span style="color:#198754;font-size:1.1rem">&#9679;</span>`;
         statusText = `<span class="text-success-emphasis">${esc(chk.detail || 'OK')}</span>`;

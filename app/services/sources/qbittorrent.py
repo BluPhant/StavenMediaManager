@@ -255,7 +255,8 @@ class QbittorrentSource(BaseSource):
 
     def is_configured(self) -> bool:
         return bool(
-            settings.qbittorrent_url
+            settings.qbittorrent_enabled
+            and settings.qbittorrent_url
             and settings.qbittorrent_user
             and settings.qbittorrent_ssh_host
         )

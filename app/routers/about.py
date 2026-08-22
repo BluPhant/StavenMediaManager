@@ -39,9 +39,17 @@ def _check_plex() -> dict:
 
 def _check_rtorrent() -> dict:
     from ..services.sources.rtorrent import RtorrentSource
-    rt = RtorrentSource()
-    if not rt.is_configured():
+    from ..config import settings as s
+    has_creds = bool(s.rtorrent_url and s.rtorrent_user and (s.rtorrent_ftp_host or s.rtorrent_ssh_host))
+    if not has_creds:
         return {"ok": False, "configured": False, "detail": "Not configured"}
+    if not s.rtorrent_enabled:
+        return {"ok": True, "configured": True, "inactive": True, "detail": "Disabled"}
+    rt = RtorrentSource()
+    # If qBittorrent is the active source, don't connect to rTorrent — just show inactive
+    from ..services.sources.qbittorrent import QbittorrentSource
+    if QbittorrentSource().is_configured():
+        return {"ok": True, "configured": True, "inactive": True, "detail": "Inactive — qBittorrent is active"}
     try:
         proxy = rt._proxy()
         t0 = time.monotonic()
@@ -54,10 +62,12 @@ def _check_rtorrent() -> dict:
 
 def _check_qbittorrent() -> dict:
     from ..services.sources.qbittorrent import QbittorrentSource, _QbtClient
-    import json
-    qbt = QbittorrentSource()
-    if not qbt.is_configured():
+    from ..config import settings as s
+    has_creds = bool(s.qbittorrent_url and s.qbittorrent_user and s.qbittorrent_ssh_host)
+    if not has_creds:
         return {"ok": False, "configured": False, "detail": "Not configured"}
+    if not s.qbittorrent_enabled:
+        return {"ok": True, "configured": True, "inactive": True, "detail": "Disabled"}
     try:
         client = _QbtClient()
         t0 = time.monotonic()

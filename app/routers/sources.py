@@ -20,12 +20,14 @@ def sources_status():
     return {
         "rtorrent": {
             "configured": rt.is_configured(),
+            "enabled":    settings.rtorrent_enabled,
             "url":        settings.rtorrent_url or None,
             "tag":        settings.rtorrent_tag,
             "ssh_host":   settings.rtorrent_ssh_host or None,
         },
         "qbittorrent": {
             "configured": qbt.is_configured(),
+            "enabled":    settings.qbittorrent_enabled,
             "url":        settings.qbittorrent_url or None,
             "category":   settings.qbittorrent_category,
             "ssh_host":   settings.qbittorrent_ssh_host or None,

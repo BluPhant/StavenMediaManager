@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     # RTORRENT_SSH_USER   SSH username (usually same as RTORRENT_USER)
     # RTORRENT_SSH_KEY_PATH  path to mounted SSH private key (e.g. /config/ssh/id_rsa)
     # RTORRENT_SSH_PASS   SSH password — used only if no key path is set
+    rtorrent_enabled: bool = True
     rtorrent_url: str = ""
     rtorrent_user: str = ""
     rtorrent_pass: str = ""
@@ -66,6 +67,7 @@ class Settings(BaseSettings):
     # QBITTORRENT_SSH_KEY_PATH  path to mounted SSH private key (e.g. /config/ssh/id_rsa)
     # QBITTORRENT_DOWNLOAD_ROOT  absolute path that is the torrent save root on the server
     # QBITTORRENT_THREADS    parallel SFTP connections per torrent (default 4)
+    qbittorrent_enabled: bool = True
     qbittorrent_url: str = ""
     qbittorrent_user: str = ""
     qbittorrent_pass: str = ""

@@ -367,7 +367,8 @@ class RtorrentSource(BaseSource):
 
     def is_configured(self) -> bool:
         return bool(
-            settings.rtorrent_url
+            settings.rtorrent_enabled
+            and settings.rtorrent_url
             and settings.rtorrent_user
             and (settings.rtorrent_ftp_host or settings.rtorrent_ssh_host)
         )
