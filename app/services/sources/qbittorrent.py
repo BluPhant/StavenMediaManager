@@ -284,6 +284,7 @@ class QbittorrentSource(BaseSource):
         # Single-file: content_path is the actual file (save_path/filename.ext).
         is_multi = content_path == f"{save_path}/{name}"
         file_paths = [f["name"] for f in files]
+        file_sizes = {f["name"]: int(f.get("size", 0)) for f in files}
 
         return SourceItem(
             id=hash_,
@@ -294,6 +295,7 @@ class QbittorrentSource(BaseSource):
             metadata={
                 "category":     t.get("category", ""),
                 "files":        file_paths,
+                "file_sizes":   file_sizes,
                 "is_multi":     is_multi,
                 "save_path":    save_path,
                 "content_path": content_path,
@@ -457,15 +459,14 @@ class QbittorrentSource(BaseSource):
             if item.suggested_type == "movies":
                 file_paths = _filter_movie_files(file_paths)
 
+            file_sizes = item.metadata.get("file_sizes", {})
             # file_paths are relative to save_path
             transfers = [
-                (f"{save_path}/{f}", os.path.join(dest_dir, f))
+                (f"{save_path}/{f}", os.path.join(dest_dir, f), file_sizes.get(f, 0))
                 for f in file_paths
             ]
-            logger.info(f"sftp multi: {name}  {len(transfers)} file(s)  {threads} concurrent")
+            logger.info(f"sftp multi: {name}  {len(transfers)} file(s)  {threads} threads/file")
 
-            active_procs: list[subprocess.Popen] = []
-            lock = threading.Lock()
             done_event = threading.Event()
 
             def _progress_loop():
@@ -475,39 +476,15 @@ class QbittorrentSource(BaseSource):
             prog = threading.Thread(target=_progress_loop, daemon=True)
             prog.start()
 
-            def _dl_one(remote: str, local: str) -> None:
-                os.makedirs(os.path.dirname(local) or ".", exist_ok=True)
-                cmd = _curl_sftp_base() + ["--output", local, _sftp_url(remote)]
-                p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                with lock:
-                    active_procs.append(p)
-                _, stderr = p.communicate()
-                with lock:
-                    if p in active_procs:
-                        active_procs.remove(p)
-                if p.returncode != 0:
-                    raise RuntimeError(
-                        f"curl sftp failed ({p.returncode}): "
-                        f"{stderr.decode(errors='replace').strip()}"
-                    )
-
-            def _kill_all():
-                with lock:
-                    for p in list(active_procs):
-                        try:
-                            p.terminate()
-                        except Exception:
-                            pass
-
             try:
-                with ThreadPoolExecutor(max_workers=threads) as pool:
-                    futures = {pool.submit(_dl_one, r, l): (r, l) for r, l in transfers}
-                    for future in as_completed(futures):
-                        if cancel_check and cancel_check():
-                            _kill_all()
-                            pool.shutdown(wait=False, cancel_futures=True)
-                            raise InterruptedError("Download cancelled")
-                        future.result()
+                # Download files sequentially; each uses parallel segments internally.
+                # For torrents with many small files, one-at-a-time is fine.
+                # For movies (typically 1 large file), this gives full thread parallelism.
+                for remote, local, fsize in transfers:
+                    if cancel_check and cancel_check():
+                        raise InterruptedError("Download cancelled")
+                    _download_single_sftp(remote, local, fsize, threads,
+                                          cancel_check=cancel_check)
             except InterruptedError:
                 _kill_all()
                 raise
