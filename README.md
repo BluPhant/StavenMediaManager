@@ -98,10 +98,17 @@ All configuration is via environment variables. Nothing is stored in the image.
 | `PLEX_URL` | — | e.g. `http://192.168.1.x:32400` |
 | `PLEX_TOKEN` | — | [How to find your token](https://support.plex.tv/articles/204059436) |
 
-### qBittorrent / Seedbox sync (optional — takes priority over rTorrent when configured)
+### Seedbox sync (optional)
+
+Two seedbox clients are supported. Configure one or both — **qBittorrent takes priority** when both are present. Set `*_ENABLED=false` to disable a client without removing its credentials (useful when switching clients).
+
+#### qBittorrent (recommended)
+
+Downloads via SFTP (curl). Connects to the Web API for torrent state; uses SFTP for file transfer.
 
 | Variable | Default | Description |
 |---|---|---|
+| `QBITTORRENT_ENABLED` | `true` | Set `false` to disable without removing credentials |
 | `QBITTORRENT_URL` | — | Web UI base URL, e.g. `https://user.host.usbx.me/qbittorrent` |
 | `QBITTORRENT_USER` | — | Web UI username |
 | `QBITTORRENT_PASS` | — | Web UI password |
@@ -114,15 +121,17 @@ All configuration is via environment variables. Nothing is stored in the image.
 | `QBITTORRENT_DOWNLOAD_ROOT` | — | Absolute path of the torrent save root on the server |
 | `QBITTORRENT_THREADS` | `4` | Parallel SFTP connections per torrent download |
 
-### rTorrent / Seedbox sync (optional)
+#### rTorrent
+
+Downloads via FTPS (curl). Connects via XMLRPC for torrent state; uses FTPS for file transfer.
 
 | Variable | Default | Description |
 |---|---|---|
+| `RTORRENT_ENABLED` | `true` | Set `false` to disable without removing credentials |
 | `RTORRENT_URL` | — | XMLRPC endpoint, e.g. `https://user.host.usbx.me/RPC2` |
 | `RTORRENT_USER` | — | HTTP basic auth username |
 | `RTORRENT_PASS` | — | HTTP basic auth password |
 | `RTORRENT_TAG` | `import` | ruTorrent label to watch for completed torrents |
-| `RTORRENT_LOOKBACK_HOURS` | `24` | How far back to check for completed torrents |
 | `RTORRENT_SSH_HOST` | — | Seedbox SSH hostname |
 | `RTORRENT_SSH_PORT` | `22` | SSH port |
 | `RTORRENT_SSH_USER` | — | SSH username |
