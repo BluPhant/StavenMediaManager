@@ -54,6 +54,30 @@ class Settings(BaseSettings):
     rtorrent_ftp_root: str = ""
     rtorrent_ftp_threads: int = 4
 
+    # ── qBittorrent / seedbox sync (optional) ────────────────────────────
+    # QBITTORRENT_URL        e.g. https://username.servername.usbx.me/qbittorrent
+    # QBITTORRENT_USER       Web UI username
+    # QBITTORRENT_PASS       Web UI password
+    # QBITTORRENT_CATEGORY   category to watch for completed torrents (e.g. "pEaNuT")
+    # QBITTORRENT_SSH_HOST   e.g. servername.usbx.me
+    # QBITTORRENT_SSH_PORT   default 22
+    # QBITTORRENT_SSH_USER   SSH username (usually same as QBITTORRENT_USER)
+    # QBITTORRENT_SSH_PASS   SSH password
+    # QBITTORRENT_SSH_KEY_PATH  path to mounted SSH private key (e.g. /config/ssh/id_rsa)
+    # QBITTORRENT_DOWNLOAD_ROOT  absolute path that is the torrent save root on the server
+    # QBITTORRENT_THREADS    parallel SFTP connections per torrent (default 4)
+    qbittorrent_url: str = ""
+    qbittorrent_user: str = ""
+    qbittorrent_pass: str = ""
+    qbittorrent_category: str = "import"
+    qbittorrent_ssh_host: str = ""
+    qbittorrent_ssh_port: int = 22
+    qbittorrent_ssh_user: str = ""
+    qbittorrent_ssh_pass: str = ""
+    qbittorrent_ssh_key_path: str = ""
+    qbittorrent_download_root: str = ""
+    qbittorrent_threads: int = 4
+
     # ── IPTorrents search (optional) ──────────────────────────────────────
     # IPTORRENTS_USER_ID   numeric user ID shown on your profile page
     # IPTORRENTS_PASSKEY   passkey / API key from your profile page

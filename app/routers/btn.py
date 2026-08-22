@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from ..config import settings
 from ..services.btn import BTNClient
-from ..services.sources.rtorrent import RtorrentSource
+from ..services.sources import get_active_source
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/btn", tags=["btn"])
@@ -83,11 +83,11 @@ def btn_grab(req: GrabRequest):
     if not _btn.is_configured():
         raise HTTPException(status_code=400, detail="BTN not configured. Set BTN_API_KEY.")
 
-    rt = RtorrentSource()
-    if not rt.is_configured():
-        raise HTTPException(status_code=400, detail="rTorrent not configured.")
+    source = get_active_source()
+    if not source:
+        raise HTTPException(status_code=400, detail="No seedbox source configured.")
 
-    label = req.label.strip() or settings.rtorrent_tag
+    label = req.label.strip() or source.default_category
 
     logger.info(f"BTN grab: fetching {req.torrent_url[:80]}…")
     try:
@@ -96,11 +96,11 @@ def btn_grab(req: GrabRequest):
         logger.error(f"BTN grab fetch error: {exc}")
         raise HTTPException(status_code=502, detail=f"Failed to fetch .torrent: {exc}")
 
-    logger.info(f"BTN grab: loading {len(torrent_bytes)} bytes into rTorrent (label={label!r})")
+    logger.info(f"BTN grab: loading {len(torrent_bytes)} bytes into seedbox (label={label!r})")
     try:
-        rt.load_torrent(torrent_bytes, label=label)
+        source.load_torrent(torrent_bytes, label=label)
     except Exception as exc:
-        logger.error(f"BTN grab rTorrent error: {exc}")
-        raise HTTPException(status_code=502, detail=f"Failed to load into rTorrent: {exc}")
+        logger.error(f"BTN grab load error: {exc}")
+        raise HTTPException(status_code=502, detail=f"Failed to load torrent: {exc}")
 
     return {"status": "ok", "label": label, "size": len(torrent_bytes)}

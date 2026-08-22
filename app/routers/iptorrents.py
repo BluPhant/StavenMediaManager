@@ -20,7 +20,8 @@ from ..config import settings
 from ..database import get_db
 from ..services.iptorrents import IPTorrentsClient, build_search_cascade, parse_query
 from ..services.movies import auto_match_movie, search_tmdb
-from ..services.sources.rtorrent import RtorrentSource, extract_info_hash, extract_torrent_name
+from ..services.sources import get_active_source
+from ..services.sources.rtorrent import extract_info_hash, extract_torrent_name
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/iptorrents", tags=["iptorrents"])
@@ -32,14 +33,15 @@ _ipt = IPTorrentsClient()
 
 @router.get("/status")
 def iptorrents_status():
-    rt = RtorrentSource()
+    source = get_active_source()
     return {
         "iptorrents": {
             "configured": _ipt.is_configured(),
             "domain": settings.iptorrents_domain or "iptorrents.com",
         },
-        "rtorrent": {
-            "configured": rt.is_configured(),
+        "seedbox": {
+            "configured": source is not None,
+            "type": source.__class__.__name__ if source else None,
         },
     }
 
@@ -396,14 +398,14 @@ def iptorrents_grab(req: GrabRequest, db: Session = Depends(get_db)):
             detail="IPTorrents not configured. Set IPTORRENTS_USER_ID and IPTORRENTS_PASSKEY.",
         )
 
-    rt = RtorrentSource()
-    if not rt.is_configured():
+    source = get_active_source()
+    if not source:
         raise HTTPException(
             status_code=400,
-            detail="rTorrent not configured. Set RTORRENT_URL and credentials.",
+            detail="No seedbox source configured. Set QBITTORRENT_URL or RTORRENT_URL with credentials.",
         )
 
-    label = req.label.strip() or settings.rtorrent_tag
+    label = req.label.strip() or source.default_category
 
     # 1. Download .torrent bytes from IPT
     logger.info(f"IPT grab: fetching torrent from {req.torrent_url[:80]}…")
@@ -417,7 +419,7 @@ def iptorrents_grab(req: GrabRequest, db: Session = Depends(get_db)):
     if not req.force:
         try:
             info_hash = extract_info_hash(torrent_bytes)
-            brief = rt.list_all_brief()
+            brief = source.list_all_brief()
             if info_hash in brief:
                 existing = brief[info_hash]
                 logger.info(f"IPT grab: duplicate detected hash={info_hash} name={existing['name']!r}")
@@ -436,13 +438,13 @@ def iptorrents_grab(req: GrabRequest, db: Session = Depends(get_db)):
         except Exception as exc:
             logger.warning(f"IPT grab hash-check failed (non-fatal): {exc}")
 
-    # 3. Load into rTorrent
-    logger.info(f"IPT grab: loading {len(torrent_bytes)} bytes into rTorrent (label={label!r})")
+    # 3. Load into seedbox
+    logger.info(f"IPT grab: loading {len(torrent_bytes)} bytes into seedbox (label={label!r})")
     try:
-        rt.load_torrent(torrent_bytes, label=label)
+        source.load_torrent(torrent_bytes, label=label)
     except Exception as exc:
-        logger.error(f"IPT grab rTorrent error: {exc}")
-        raise HTTPException(status_code=502, detail=f"Failed to load into rTorrent: {exc}")
+        logger.error(f"IPT grab load error: {exc}")
+        raise HTTPException(status_code=502, detail=f"Failed to load torrent: {exc}")
 
     # Resolve the info hash for linking to movie_searches
     info_hash = ""

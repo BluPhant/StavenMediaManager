@@ -24,6 +24,11 @@ class SourceItem:
 class BaseSource(ABC):
     """All download sources implement this interface."""
 
+    @property
+    def default_category(self) -> str:
+        """Category / label to apply when loading a new torrent into this source."""
+        return ""
+
     @abstractmethod
     def is_configured(self) -> bool:
         """Return True if required settings are present."""

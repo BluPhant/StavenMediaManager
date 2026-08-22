@@ -15,8 +15,8 @@ A personal home-media management tool I built for my own Unraid setup and am mak
 - **Watching queue** — Add movies that aren't on IPT yet. An immediate check job fires on queue; a background scheduler re-checks every 4 hours and auto-grabs when a copy at your minimum quality appears.
 - **Search history** — Every confirmed movie search is recorded with Plex/seedbox/IPT status cached. One-click refresh re-runs all checks live.
 - **Audiobook Find** — Dedicated audiobook search in the Find page. Search by title, author, or both. Results pull from Audible/Audnexus and are cross-referenced against IPT audiobook torrents in parallel; IPT-available books are highlighted and sorted first. Selecting a result shows a presence check against your local library folder and the seedbox before confirming.
-- **Seedbox sync** — Polls an rTorrent seedbox for completed torrents tagged with a label, downloads them over FTPS (parallel byte-range segments), and moves them into the local media library.
-- **TV / general search** — Search IPTorrents (TV, music, audiobooks, games, etc.) or BroadcasTheNet for TV. Grab and load directly into rTorrent.
+- **Seedbox sync** — Polls a qBittorrent or rTorrent seedbox for completed torrents in a watched category/label, downloads them over SFTP/FTPS (parallel byte-range segments), and moves them into the local media library.
+- **TV / general search** — Search IPTorrents (TV, music, audiobooks, games, etc.) or BroadcasTheNet for TV. Grab and load directly into qBittorrent or rTorrent.
 - **Plex integration** — Full library scan with IMDB ID and resolution data, 60-second cache, targeted path refresh after every move.
 - **Job tracking** — All jobs (sync, move, extract, queue-check, upgrade-check) are tracked in SQLite with live progress in the UI.
 - **System health** — About page runs live checks against all connected services (Plex, rTorrent, IPTorrents, BTN, TMDB, Audible) and reports latency or error detail.
@@ -29,7 +29,7 @@ A personal home-media management tool I built for my own Unraid setup and am mak
 |---|---|
 | Backend | Python 3.11, FastAPI |
 | Database | SQLite via SQLAlchemy |
-| Seedbox protocol | rTorrent XMLRPC, FTPS (curl), SFTP |
+| Seedbox protocol | qBittorrent Web API, rTorrent XMLRPC, SFTP/FTPS (curl) |
 | Frontend | Vanilla JS SPA, Bootstrap 5, no build step |
 | Container | Docker (single image) |
 | CI | GitHub Actions → `ghcr.io` |
@@ -98,6 +98,22 @@ All configuration is via environment variables. Nothing is stored in the image.
 | `PLEX_URL` | — | e.g. `http://192.168.1.x:32400` |
 | `PLEX_TOKEN` | — | [How to find your token](https://support.plex.tv/articles/204059436) |
 
+### qBittorrent / Seedbox sync (optional — takes priority over rTorrent when configured)
+
+| Variable | Default | Description |
+|---|---|---|
+| `QBITTORRENT_URL` | — | Web UI base URL, e.g. `https://user.host.usbx.me/qbittorrent` |
+| `QBITTORRENT_USER` | — | Web UI username |
+| `QBITTORRENT_PASS` | — | Web UI password |
+| `QBITTORRENT_CATEGORY` | `import` | Category to watch for completed torrents |
+| `QBITTORRENT_SSH_HOST` | — | SFTP host, e.g. `host.usbx.me` |
+| `QBITTORRENT_SSH_PORT` | `22` | SFTP port |
+| `QBITTORRENT_SSH_USER` | — | SFTP username |
+| `QBITTORRENT_SSH_PASS` | — | SFTP password |
+| `QBITTORRENT_SSH_KEY_PATH` | — | Path to mounted SSH private key, e.g. `/config/ssh/id_rsa` |
+| `QBITTORRENT_DOWNLOAD_ROOT` | — | Absolute path of the torrent save root on the server |
+| `QBITTORRENT_THREADS` | `4` | Parallel SFTP connections per torrent download |
+
 ### rTorrent / Seedbox sync (optional)
 
 | Variable | Default | Description |
@@ -144,7 +160,7 @@ All configuration is via environment variables. Nothing is stored in the image.
 
 ## Notes
 
-- The seedbox sync uses **FTPS** (FTP over TLS) rather than SFTP for download throughput.
+- The seedbox sync uses **SFTP** (via curl) for qBittorrent and **FTPS** (FTP over TLS, via curl) for rTorrent. Both use parallel byte-range segments for throughput. Configure qBittorrent env vars to use qBittorrent; it takes priority over rTorrent when both are set.
 - Category detection is driven by the subdirectory structure under `/media` — create a folder called `movies`, `audiobooks`, etc. and the UI picks it up automatically.
 - Movie upgrades: when a better copy is imported over an existing one, the old file moves to `/media/movies/.trash/` pending a review in the **Movies → Pending Review** tab.
 - Plex is the system of record for local media. The movie tracking tables in this app store workflow state only — what you searched, what's downloading, what needs a review.

@@ -171,13 +171,13 @@ def presence_check(
     except OSError:
         pass
 
-    # ── Seedbox scan via rTorrent ─────────────────────────────────────────────
+    # ── Seedbox scan ──────────────────────────────────────────────────────────
     sbx_found, sbx_match, sbx_error = False, None, None
     try:
-        from ..services.sources.rtorrent import RtorrentSource
-        rt = RtorrentSource()
-        if rt.is_configured():
-            torrents = rt.list_all_brief()
+        from ..services.sources import get_active_source
+        source = get_active_source()
+        if source:
+            torrents = source.list_all_brief()
             for info in torrents.values():
                 name = info.get("name", "")
                 if _norm(name).find(needle) != -1:

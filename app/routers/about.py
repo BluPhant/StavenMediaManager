@@ -52,6 +52,23 @@ def _check_rtorrent() -> dict:
         return {"ok": False, "configured": True, "detail": str(exc)}
 
 
+def _check_qbittorrent() -> dict:
+    from ..services.sources.qbittorrent import QbittorrentSource, _QbtClient
+    import json
+    qbt = QbittorrentSource()
+    if not qbt.is_configured():
+        return {"ok": False, "configured": False, "detail": "Not configured"}
+    try:
+        client = _QbtClient()
+        t0 = time.monotonic()
+        raw = client.get("/api/v2/app/version")
+        ms = int((time.monotonic() - t0) * 1000)
+        version = raw.decode(errors="replace").strip()
+        return {"ok": True, "configured": True, "detail": f"qBittorrent {version}", "ms": ms}
+    except Exception as exc:
+        return {"ok": False, "configured": True, "detail": str(exc)}
+
+
 def _check_ipt() -> dict:
     from ..services.iptorrents import IPTorrentsClient
     ipt = IPTorrentsClient()
@@ -142,14 +159,15 @@ def _check_discogs() -> dict:
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 _CHECKS = {
-    "plex":       _check_plex,
-    "rtorrent":   _check_rtorrent,
-    "iptorrents": _check_ipt,
-    "tmdb":       _check_tmdb,
-    "btn":        _check_btn,
-    "igdb":       _check_igdb,
-    "discogs":    _check_discogs,
-    "audible":    _check_audible,
+    "plex":         _check_plex,
+    "rtorrent":     _check_rtorrent,
+    "qbittorrent":  _check_qbittorrent,
+    "iptorrents":   _check_ipt,
+    "tmdb":         _check_tmdb,
+    "btn":          _check_btn,
+    "igdb":         _check_igdb,
+    "discogs":      _check_discogs,
+    "audible":      _check_audible,
 }
 
 

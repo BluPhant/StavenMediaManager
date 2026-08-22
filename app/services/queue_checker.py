@@ -13,7 +13,8 @@ from ..database import SessionLocal
 from ..models import MovieMatch, MovieSearch
 from .job_manager import update_job
 from .iptorrents import IPTorrentsClient
-from .sources.rtorrent import RtorrentSource, extract_info_hash
+from .sources import get_active_source
+from .sources.rtorrent import extract_info_hash
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def run_single_movie_check(job_id: int, imdb_id: str) -> None:
                    message=f"Queued: {title_str}. IPT not configured.")
         return
 
-    rt = RtorrentSource()
+    source = get_active_source()
 
     try:
         # Append resolution to query when targeting 2160p — verified to cut results
@@ -83,16 +84,16 @@ def run_single_movie_check(job_id: int, imdb_id: str) -> None:
                                f"{title_str} stays on watch list.")
             return
 
-        if not rt.is_configured():
+        if not source:
             update_job(job_id, status="done", progress=100,
-                       message=f"Found {_res_from_title(best.title)} on IPT but rTorrent "
-                               f"not configured — {title_str} stays on watch list.")
+                       message=f"Found {_res_from_title(best.title)} on IPT but no seedbox "
+                               f"configured — {title_str} stays on watch list.")
             return
 
         update_job(job_id, progress=60, message=f"Grabbing {best.title[:65]}…")
         torrent_bytes = ipt.fetch_torrent_bytes(best.torrent_url)
         info_hash     = extract_info_hash(torrent_bytes)
-        rt.load_torrent(torrent_bytes, label=settings.rtorrent_tag)
+        source.load_torrent(torrent_bytes, label=source.default_category)
         _mark_grabbed(imdb_id, info_hash)
 
         if settings.tmdb_api_key:
@@ -134,10 +135,10 @@ def run_queue_check(job_id: int) -> None:
                    message="IPTorrents not configured — cannot check queue.")
         return
 
-    rt = RtorrentSource()
-    if not rt.is_configured():
+    source = get_active_source()
+    if not source:
         update_job(job_id, status="error",
-                   message="rTorrent not configured — cannot grab from queue.")
+                   message="No seedbox source configured — cannot grab from queue.")
         return
 
     total   = len(queued)
@@ -172,8 +173,7 @@ def run_queue_check(job_id: int) -> None:
             logger.info(f"Queue: grabbing {movie.title} ({best.title})")
             torrent_bytes = ipt.fetch_torrent_bytes(best.torrent_url)
             info_hash     = extract_info_hash(torrent_bytes)
-            label         = settings.rtorrent_tag
-            rt.load_torrent(torrent_bytes, label=label)
+            source.load_torrent(torrent_bytes, label=source.default_category)
 
             # Update movie record
             _mark_grabbed(movie.imdb_id, info_hash)

@@ -15,17 +15,13 @@ from ..database import SessionLocal
 from ..models import Job, MovieMatch, SyncedItem, SwitchContent, SwitchTitle
 from . import job_manager
 from .job_manager import update_job
-from .sources.rtorrent import RtorrentSource
+from .sources import get_all_sources
 
 logger = logging.getLogger(__name__)
 
 
 def _get_sources():
-    sources = []
-    rt = RtorrentSource()
-    if rt.is_configured():
-        sources.append(("rtorrent", rt))
-    return sources
+    return get_all_sources()
 
 
 def _get_synced_ids(source: str) -> set[str]:

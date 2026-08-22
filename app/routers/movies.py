@@ -444,16 +444,16 @@ def _res_rank(res: str | None) -> int:
 
 
 def _check_seedbox(imdb_id: str, db: Session) -> dict:
-    from ..services.sources.rtorrent import RtorrentSource
-    rt = RtorrentSource()
-    if not rt.is_configured():
+    from ..services.sources import get_active_source
+    source = get_active_source()
+    if not source:
         return {"configured": False, "found": False, "hash": None, "pct": None}
 
     movie = db.query(MovieSearch).filter(MovieSearch.imdb_id == imdb_id).first()
     stored_hash = movie.sbx_hash if movie else None
 
     try:
-        brief = rt.list_all_brief()
+        brief = source.list_all_brief()
         if stored_hash and stored_hash in brief:
             t = brief[stored_hash]
             return {
