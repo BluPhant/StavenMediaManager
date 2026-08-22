@@ -33,14 +33,14 @@ def get_active_source() -> BaseSource | None:
 
 def get_all_sources() -> list[tuple[str, BaseSource]]:
     """
-    Return all configured sources as [(name, source)] pairs.
-    Used by syncer so all sources are polled on each sync run.
+    Return configured sources as [(name, source)] pairs for the syncer.
+    Uses the same priority as get_active_source: qBittorrent wins when both
+    are configured, so rTorrent is not polled while qBittorrent is active.
     """
-    result: list[tuple[str, BaseSource]] = []
     qbt = QbittorrentSource()
     if qbt.is_configured():
-        result.append(("qbittorrent", qbt))
+        return [("qbittorrent", qbt)]
     rt = RtorrentSource()
     if rt.is_configured():
-        result.append(("rtorrent", rt))
-    return result
+        return [("rtorrent", rt)]
+    return []
