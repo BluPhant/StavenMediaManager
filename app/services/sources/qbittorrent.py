@@ -364,7 +364,7 @@ class QbittorrentSource(BaseSource):
         category = label or settings.qbittorrent_category
         self._client.post_multipart(
             "/api/v2/torrents/add",
-            fields={"category": category},
+            fields={"category": category, "stopped": "false", "paused": "false"},
             files={"torrents": ("upload.torrent", torrent_bytes)},
         )
         logger.info(f"Loaded torrent into qBittorrent with category={category!r}")
