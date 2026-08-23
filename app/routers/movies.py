@@ -51,6 +51,7 @@ _LOWQ_RE  = re.compile(
     r"\b(CAM|CAMRIP|HDCAM|HDTS|HDTC|TS|TELESYNC|TC|TELECINE|PDVD|SCR|SCREENER|DVDSCR)\b",
     re.IGNORECASE,
 )
+_LOWQ_CAT_RE = re.compile(r"cam|screener|scr", re.IGNORECASE)
 # YIFY/YTS — aggressively compressed, wrong for 4K libraries
 _YIFY_RE  = re.compile(r"\b(YIFY|YTS(\.[A-Z]{2,4})?)\b", re.IGNORECASE)
 # Bare DV: has DV token but no HDR token alongside it — Profile 5 (no fallback)
@@ -585,11 +586,14 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
         # reduce IPT results from ~32 mixed to ~6 clean on-target results.
         res_param = "2160p" if 0 <= current_plex_rank < 4 else None
         raw = ipt.search_by_imdb_id(imdb_id, category="movies", resolution=res_param)
+        def _is_lowq(r) -> bool:
+            return bool(_LOWQ_RE.search(r.title)) or bool(_LOWQ_CAT_RE.search(r.ipt_category or ""))
+
         # Strip YIFY/YTS — aggressively compressed, wrong for 4K libraries
         raw = [r for r in raw if not _YIFY_RE.search(r.title)]
         # Track whether only CAM/Screener copies exist before stripping them
-        cam_only = bool(raw) and all(_LOWQ_RE.search(r.title) for r in raw)
-        raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
+        cam_only = bool(raw) and all(_is_lowq(r) for r in raw)
+        raw = [r for r in raw if not _is_lowq(r)]
         search_method = "imdb"
         if not raw and title:
             # IPT didn’t return results for the IMDB ID — fall back to title search.
@@ -602,8 +606,8 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
                 raw = ipt.search(query=q, category="movies", limit=100)
                 raw = [r for r in raw if not _YIFY_RE.search(r.title)]
                 if not cam_only:
-                    cam_only = bool(raw) and all(_LOWQ_RE.search(r.title) for r in raw)
-                raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
+                    cam_only = bool(raw) and all(_is_lowq(r) for r in raw)
+                raw = [r for r in raw if not _is_lowq(r)]
                 if raw:
                     logger.info(f"IPT title fallback ‘{q}’: {len(raw)} results")
                     break
