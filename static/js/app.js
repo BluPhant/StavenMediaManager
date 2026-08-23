@@ -2679,6 +2679,15 @@ const MovieDiscover = {
          </div>`
       : '';
 
+    const camOnlyBanner = ipt.cam_only
+      ? `<div class="alert alert-warning py-2 small mb-2">
+           <i class="bi bi-camera-video-fill me-1"></i>
+           <strong>CAM copies only</strong> — no quality release on IPT yet.
+           ${watchBtn}
+           ${d.queued ? '— auto-grabs when a 2160p release appears.' : '— queues and auto-grabs when a quality release appears.'}
+         </div>`
+      : '';
+
     if (!results.length) {
       const noMsg = ipt.filtered_by_quality && !showAll
         ? `No copies above ${esc(ipt.current_plex_resolution||'?')} found on IPT.
@@ -2686,7 +2695,7 @@ const MovieDiscover = {
              Show all qualities
            </button>`
         : `Not found on IPT. ${watchBtn}`;
-      return `<div class="mt-3 text-secondary small">${titleMatchBanner}${filterBanner}${noMsg}</div>`;
+      return `<div class="mt-3 text-secondary small">${titleMatchBanner}${camOnlyBanner}${filterBanner}${noMsg}</div>`;
     }
 
     const movieYear = d.year ? parseInt(d.year, 10) : null;
@@ -2702,11 +2711,18 @@ const MovieDiscover = {
         : '';
       const title = r.title.length > 55 ? r.title.slice(0, 55) + '…' : r.title;
 
+      const dvWarn = r.dv_only
+        ? `<span class="badge bg-warning text-dark ms-1" style="font-size:.6rem"
+                title="Dolby Vision Profile 5 — no HDR10 fallback. May show wrong colors on non-DV players.">
+             DV-only
+           </span>`
+        : '';
+
       return `
         <tr class="${isBest && idx === 0 ? 'table-success' : ''}${yearMismatch ? ' text-secondary opacity-50' : ''}">
           <td class="text-nowrap">${yearMismatch ? '' : bestTag}${_resBadge(r.resolution)}</td>
           <td class="small" style="max-width:260px">
-            <div class="text-truncate" title="${esc(r.title)}">${esc(title)}
+            <div class="text-truncate" title="${esc(r.title)}">${esc(title)}${dvWarn}
               ${yearMismatch ? `<span class="ms-1" style="font-size:.65rem" title="Torrent year ${titleYear} pre-dates movie release ${movieYear} — likely a different film">· ${titleYear}</span>` : ''}
             </div>
             <div style="font-size:.7rem">${esc(r.ipt_category||'')}</div>

@@ -18,6 +18,7 @@ POST /api/movies/match
 DELETE /api/movies/match
 """
 import logging
+import math
 import os
 import re
 import shutil
@@ -50,6 +51,11 @@ _LOWQ_RE  = re.compile(
     r"\b(CAM|CAMRIP|HDCAM|TS|TELESYNC|TC|TELECINE|PDVD|SCR|SCREENER|DVDSCR)\b",
     re.IGNORECASE,
 )
+# YIFY/YTS — aggressively compressed, wrong for 4K libraries
+_YIFY_RE  = re.compile(r"\b(YIFY|YTS(\.[A-Z]{2,4})?)\b", re.IGNORECASE)
+# Bare DV: has DV token but no HDR token alongside it — Profile 5 (no fallback)
+_DV_RE    = re.compile(r"\bDV\b",  re.IGNORECASE)
+_HDR_RE   = re.compile(r"\bHDR\b", re.IGNORECASE)
 
 # Size scoring constants
 _IDEAL_GB_PER_2HR = 15.0   # target for a 2-hour 2160p movie
@@ -508,30 +514,48 @@ def _size_fitness_label(size_bytes: int, runtime_minutes: int = 120) -> str:
         return "small"
 
 
+def _is_dv_only(title: str) -> bool:
+    """True when the title has DV but no HDR — likely Profile 5 (no HDR10 fallback)."""
+    return bool(_DV_RE.search(title)) and not bool(_HDR_RE.search(title))
+
+
 def _source_bonus(title: str) -> float:
-    """Score the source type. WEB-DL preferred; REMUX penalised for size."""
+    """
+    Score the source type.
+    WEB-DL is the gold standard; adjustments for Hybrid, bare DV, REMUX.
+    """
     t = title.lower()
     if "remux" in t:
-        return 0.4   # pristine quality but massive — penalised for size
-    if "web-dl" in t or "webdl" in t:
-        return 1.0
-    if "blu-ray" in t or "bluray" in t or "bdrip" in t or "brrip" in t:
-        return 0.9
-    if "webrip" in t:
-        return 0.8
-    return 0.6
+        score = 0.4   # pristine quality but massive — penalised for size
+    elif "web-dl" in t or "webdl" in t:
+        score = 1.0
+    elif "blu-ray" in t or "bluray" in t or "bdrip" in t or "brrip" in t:
+        score = 0.9
+    elif "webrip" in t:
+        score = 0.8
+    else:
+        score = 0.6
+
+    if "hybrid" in t:
+        score = min(score + 0.1, 1.0)   # multi-source blend = better quality/size ratio
+
+    if _is_dv_only(title):
+        score *= 0.6   # Profile 5 DV — no HDR10 fallback, breaks many players
+
+    return score
 
 
 def _score_result(r, runtime_minutes: int) -> float:
     """
     Composite score used to rank IPT results.
-    Weights: resolution (dominant) → size fitness → source type → seed count.
+    Weights: resolution (dominant) → size fitness → source type → seeders (log).
+    Seeder weight uses log scale so 500-seeder YIFY can't beat a 30-seeder quality encode.
     """
     res_rank   = _RES_RANK.get(_res_from_title(r.title), 0)
     size_s     = _size_score(r.size_bytes, runtime_minutes)
     src_s      = _source_bonus(r.title)
-    seeder_s   = min(r.seeders / 100.0, 1.0)
-    return res_rank * 100 + size_s * 30 + src_s * 10 + seeder_s * 5
+    seeder_s   = min(math.log1p(r.seeders) / math.log1p(50), 1.0)
+    return res_rank * 100 + size_s * 30 + src_s * 10 + seeder_s * 15
 
 
 def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
@@ -552,7 +576,8 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
     ipt = IPTorrentsClient()
     _empty = {"configured": False, "results": [], "all_results": [], "best": None,
               "best_resolution": None, "filtered_by_quality": False,
-              "current_plex_resolution": None, "runtime_minutes": runtime_minutes}
+              "current_plex_resolution": None, "runtime_minutes": runtime_minutes,
+              "cam_only": False}
     if not ipt.is_configured():
         return _empty
     try:
@@ -560,7 +585,10 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
         # reduce IPT results from ~32 mixed to ~6 clean on-target results.
         res_param = "2160p" if 0 <= current_plex_rank < 4 else None
         raw = ipt.search_by_imdb_id(imdb_id, category="movies", resolution=res_param)
-        # Strip CAM / TS / Screener (word-boundary safe — won't catch "BATS")
+        # Strip YIFY/YTS — aggressively compressed, wrong for 4K libraries
+        raw = [r for r in raw if not _YIFY_RE.search(r.title)]
+        # Track whether only CAM/Screener copies exist before stripping them
+        cam_only = bool(raw) and all(_LOWQ_RE.search(r.title) for r in raw)
         raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
         search_method = "imdb"
         if not raw and title:
@@ -572,6 +600,9 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
             # Try title+year first; if year mismatch prevents a match, retry title-only.
             for q in ([f"{clean_title} {year}", clean_title] if year else [clean_title]):
                 raw = ipt.search(query=q, category="movies", limit=100)
+                raw = [r for r in raw if not _YIFY_RE.search(r.title)]
+                if not cam_only:
+                    cam_only = bool(raw) and all(_LOWQ_RE.search(r.title) for r in raw)
                 raw = [r for r in raw if not _LOWQ_RE.search(r.title)]
                 if raw:
                     logger.info(f"IPT title fallback ‘{q}’: {len(raw)} results")
@@ -586,7 +617,7 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
                 search_method = "browse_cache"
                 logger.info(f"IPT browse-cache fallback for tmdb_id={tmdb_id}: {len(raw)} releases")
         if not raw:
-            return {**_empty, "configured": True}
+            return {**_empty, "configured": True, "cam_only": cam_only}
 
         # Sort by composite score descending
         scored = sorted(raw, key=lambda r: _score_result(r, runtime_minutes), reverse=True)
@@ -612,6 +643,7 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
             "filtered_by_quality":     upgrading and bool(filtered),
             "current_plex_resolution": _RANK_RES.get(current_plex_rank) if upgrading else None,
             "runtime_minutes":         runtime_minutes,
+            "cam_only":                False,
         }
     except Exception as exc:
         logger.warning(f"IPT search failed for {imdb_id}: {exc}")
@@ -732,6 +764,7 @@ def _serialize_ipt(r, runtime_minutes: int = 120) -> dict:
     runtime_hrs  = max(runtime_minutes / 60.0, 0.5)
     gb_per_hour  = size_gb / runtime_hrs if size_gb else 0.0
     res          = _res_from_title(r.title)
+    dv_only = _is_dv_only(r.title)
     return {
         "torrent_id":   r.torrent_id,
         "title":        r.title,
@@ -746,6 +779,7 @@ def _serialize_ipt(r, runtime_minutes: int = 120) -> dict:
         "info_url":     r.info_url,
         "pubdate":      r.pubdate,
         "resolution":   res,
+        "dv_only":      dv_only,
     }
 
 

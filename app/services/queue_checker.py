@@ -32,6 +32,8 @@ _LOWQ_RE = re.compile(
     r"\b(CAM|CAMRIP|HDCAM|TS|TELESYNC|TC|TELECINE|PDVD|SCR|SCREENER|DVDSCR)\b",
     re.IGNORECASE,
 )
+# Exclude YIFY/YTS — aggressively compressed, wrong for 4K libraries
+_YIFY_RE = re.compile(r"\b(YIFY|YTS(\.[A-Z]{2,4})?)\b", re.IGNORECASE)
 
 
 def run_single_movie_check(job_id: int, imdb_id: str) -> None:
@@ -68,7 +70,7 @@ def run_single_movie_check(job_id: int, imdb_id: str) -> None:
         # from ~32 mixed to ~6 clean 2160p-only results on IPT.
         res_param = min_res if min_rank >= 4 else None
         results   = ipt.search_by_imdb_id(imdb_id, category="movies", resolution=res_param)
-        # Exclude CAM/TS/Screener
+        results   = [r for r in results if not _YIFY_RE.search(r.title)]
         results   = [r for r in results if not _LOWQ_RE.search(r.title)]
 
         if not results:
@@ -155,6 +157,7 @@ def run_queue_check(job_id: int) -> None:
             res_param = min_res if min_rank >= 4 else None
             results = ipt.search_by_imdb_id(movie.imdb_id, category="movies",
                                              resolution=res_param)
+            results = [r for r in results if not _YIFY_RE.search(r.title)]
             results = [r for r in results if not _LOWQ_RE.search(r.title)]
             if not results:
                 _bump_check_count(movie.imdb_id)
