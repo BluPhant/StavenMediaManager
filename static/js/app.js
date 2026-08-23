@@ -2470,6 +2470,10 @@ const MovieDiscover = {
       const data = await API.post('/movies/confirm', { tmdb_id: candidate.tmdb_id });
       this._confirmed = data;
       this._renderConfirmPanel(data);
+      // Auto-watch when only CAM copies exist and not already queued
+      if (data.ipt?.cam_only && !data.queued) {
+        this._queueThis({ silent: true });
+      }
     } catch (e) {
       panel.innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div>`;
     }
@@ -2553,7 +2557,7 @@ const MovieDiscover = {
     }
   },
 
-  async _queueThis() {
+  async _queueThis({ silent = false } = {}) {
     if (!this._confirmed?.imdb_id) return;
     try {
       await API.post(`/movies/queue/${enc(this._confirmed.imdb_id)}`, { min_resolution: '2160p' });
@@ -2561,9 +2565,9 @@ const MovieDiscover = {
       // Re-render just the IPT section so the button flips to "Watching" in place
       const iptSection = document.getElementById('movie-ipt-section');
       if (iptSection) iptSection.innerHTML = this._buildIptSection(this._confirmed);
-      toast(`Watching for ${this._confirmed.title}`, 'success');
+      if (!silent) toast(`Watching for ${this._confirmed.title}`, 'success');
     } catch (e) {
-      toast(`Queue failed: ${e.message}`, 'danger');
+      if (!silent) toast(`Queue failed: ${e.message}`, 'danger');
     }
   },
 
@@ -2683,8 +2687,41 @@ const MovieDiscover = {
       ? `<div class="alert alert-warning py-2 small mb-2">
            <i class="bi bi-camera-video-fill me-1"></i>
            <strong>CAM copies only</strong> — no quality release on IPT yet.
-           ${watchBtn}
-           ${d.queued ? '— auto-grabs when a 2160p release appears.' : '— queues and auto-grabs when a quality release appears.'}
+           ${d.queued
+             ? `<span class="badge bg-warning text-dark ms-2"><i class="bi bi-clock-fill me-1"></i>Watching</span> — auto-grabs when a 2160p release appears.`
+             : `${watchBtn} — queues and auto-grabs when a quality release appears.`}
+           ${ipt.cam_results?.length
+             ? `<div class="mt-1">
+                  <button class="btn btn-link btn-sm p-0 text-warning" style="font-size:.75rem"
+                          onclick="MovieDiscover._toggleCamResults()">
+                    Show ${ipt.cam_results.length} CAM cop${ipt.cam_results.length===1?'y':'ies'}
+                  </button>
+                  <div id="movie-cam-results" style="display:none" class="mt-2">
+                    <div class="table-responsive">
+                      <table class="table table-dark table-sm align-middle mb-0 opacity-75">
+                        <thead class="text-secondary"><tr><th>Quality</th><th>Title</th><th>Size</th><th>S</th><th></th></tr></thead>
+                        <tbody>${(ipt.cam_results||[]).map(r => `
+                          <tr>
+                            <td class="text-nowrap">${_resBadge(r.resolution)}</td>
+                            <td class="small" style="max-width:260px">
+                              <div class="text-truncate" title="${esc(r.title)}">${esc(r.title.length>55?r.title.slice(0,55)+'…':r.title)}</div>
+                              <div style="font-size:.7rem">${esc(r.ipt_category||'')}</div>
+                            </td>
+                            <td class="text-nowrap small">${_humanSize(r.size_bytes)}</td>
+                            <td class="text-nowrap small text-success">${r.seeders}</td>
+                            <td>
+                              <button class="btn btn-sm btn-outline-secondary py-0"
+                                      onclick="MovieDiscover.grab(${jsStr(r.torrent_url)},${jsStr(d.imdb_id)},${jsStr(r.title)})">
+                                ${btnLabel}
+                              </button>
+                            </td>
+                          </tr>`).join('')}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>`
+             : ''}
          </div>`
       : '';
 
@@ -2757,6 +2794,43 @@ const MovieDiscover = {
            <span>Available on IPT</span>${runtime}
          </div>`;
 
+    const camSection = (ipt.cam_results?.length)
+      ? `<div class="mt-2">
+           <button class="btn btn-link btn-sm p-0 text-secondary" style="font-size:.75rem"
+                   onclick="MovieDiscover._toggleCamResults()">
+             <i class="bi bi-camera-video me-1"></i>${ipt.cam_results.length} CAM cop${ipt.cam_results.length === 1 ? 'y' : 'ies'} hidden — Show
+           </button>
+           <div id="movie-cam-results" style="display:none" class="mt-2">
+             <div class="text-warning small mb-1">
+               <i class="bi bi-exclamation-triangle-fill me-1"></i>
+               CAM/Telesync copies — poor quality, grab only if you need it now
+             </div>
+             <div class="table-responsive">
+               <table class="table table-dark table-sm align-middle mb-0 opacity-75">
+                 <thead class="text-secondary"><tr><th>Quality</th><th>Title</th><th>Size</th><th>S</th><th></th></tr></thead>
+                 <tbody>${ipt.cam_results.map(r => `
+                   <tr>
+                     <td class="text-nowrap">${_resBadge(r.resolution)}</td>
+                     <td class="small" style="max-width:260px">
+                       <div class="text-truncate" title="${esc(r.title)}">${esc(r.title.length > 55 ? r.title.slice(0,55)+'…' : r.title)}</div>
+                       <div style="font-size:.7rem">${esc(r.ipt_category||'')}</div>
+                     </td>
+                     <td class="text-nowrap small">${_humanSize(r.size_bytes)}</td>
+                     <td class="text-nowrap small text-success">${r.seeders}</td>
+                     <td>
+                       <button class="btn btn-sm btn-outline-secondary py-0"
+                               onclick="MovieDiscover.grab(${jsStr(r.torrent_url)},${jsStr(d.imdb_id)},${jsStr(r.title)})">
+                         ${btnLabel}
+                       </button>
+                     </td>
+                   </tr>`).join('')}
+                 </tbody>
+               </table>
+             </div>
+           </div>
+         </div>`
+      : '';
+
     return `
       <div class="mt-3">
         ${sectionHeader}
@@ -2769,6 +2843,7 @@ const MovieDiscover = {
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${camSection}
       </div>`;
   },
 
@@ -2800,6 +2875,20 @@ const MovieDiscover = {
       return `<div class="mt-3 text-secondary small">Not found on IPT. ${watchBtn2}</div>`;
     }
     return '';
+  },
+
+  _toggleCamResults() {
+    const el = document.getElementById('movie-cam-results');
+    if (!el) return;
+    const visible = el.style.display !== 'none';
+    el.style.display = visible ? 'none' : 'block';
+    const btn = el.previousElementSibling;
+    if (btn && btn.tagName === 'BUTTON') {
+      const count = (this._confirmed?.ipt?.cam_results?.length) || '';
+      btn.innerHTML = visible
+        ? `<i class="bi bi-camera-video me-1"></i>${count} CAM cop${count===1?'y':'ies'} hidden — Show`
+        : `<i class="bi bi-camera-video-fill me-1"></i>Hide CAM copies`;
+    }
   },
 
   _toggleIptOverride() {

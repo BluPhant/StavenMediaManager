@@ -575,8 +575,8 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
     """
     from ..services.iptorrents import IPTorrentsClient
     ipt = IPTorrentsClient()
-    _empty = {"configured": False, "results": [], "all_results": [], "best": None,
-              "best_resolution": None, "filtered_by_quality": False,
+    _empty = {"configured": False, "results": [], "all_results": [], "cam_results": [],
+              "best": None, "best_resolution": None, "filtered_by_quality": False,
               "current_plex_resolution": None, "runtime_minutes": runtime_minutes,
               "cam_only": False}
     if not ipt.is_configured():
@@ -591,9 +591,10 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
 
         # Strip YIFY/YTS — aggressively compressed, wrong for 4K libraries
         raw = [r for r in raw if not _YIFY_RE.search(r.title)]
-        # Track whether only CAM/Screener copies exist before stripping them
-        cam_only = bool(raw) and all(_is_lowq(r) for r in raw)
-        raw = [r for r in raw if not _is_lowq(r)]
+        # Separate CAM/Screener results; keep them available but out of main results
+        cam_results = [r for r in raw if _is_lowq(r)]
+        cam_only    = bool(raw) and len(cam_results) == len(raw)
+        raw         = [r for r in raw if not _is_lowq(r)]
         search_method = "imdb"
         if not raw and title:
             # IPT didn’t return results for the IMDB ID — fall back to title search.
@@ -605,8 +606,11 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
             for q in ([f"{clean_title} {year}", clean_title] if year else [clean_title]):
                 raw = ipt.search(query=q, category="movies", limit=100)
                 raw = [r for r in raw if not _YIFY_RE.search(r.title)]
+                found_cams = [r for r in raw if _is_lowq(r)]
+                if not cam_results:
+                    cam_results = found_cams
                 if not cam_only:
-                    cam_only = bool(raw) and all(_is_lowq(r) for r in raw)
+                    cam_only = bool(raw) and len(found_cams) == len(raw)
                 raw = [r for r in raw if not _is_lowq(r)]
                 if raw:
                     logger.info(f"IPT title fallback ‘{q}’: {len(raw)} results")
@@ -621,7 +625,8 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
                 search_method = "browse_cache"
                 logger.info(f"IPT browse-cache fallback for tmdb_id={tmdb_id}: {len(raw)} releases")
         if not raw:
-            return {**_empty, "configured": True, "cam_only": cam_only}
+            return {**_empty, "configured": True, "cam_only": cam_only,
+                    "cam_results": [_serialize_ipt(r, runtime_minutes) for r in cam_results]}
 
         # Sort by composite score descending
         scored = sorted(raw, key=lambda r: _score_result(r, runtime_minutes), reverse=True)
@@ -648,6 +653,7 @@ def _search_ipt(imdb_id: str, runtime_minutes: int = 120,
             "current_plex_resolution": _RANK_RES.get(current_plex_rank) if upgrading else None,
             "runtime_minutes":         runtime_minutes,
             "cam_only":                False,
+            "cam_results":             [_serialize_ipt(r, runtime_minutes) for r in cam_results],
         }
     except Exception as exc:
         logger.warning(f"IPT search failed for {imdb_id}: {exc}")
