@@ -48,7 +48,7 @@ _RES_RANK: dict[str, int] = {
 _RANK_RES: dict[int, str] = {4: "2160p", 3: "1440p", 2: "1080p", 1: "720p", 0: "480p"}
 _RES_RE   = re.compile(r"\b(2160p|1440p|1080p|720p|480p|4[Kk]|UHD)\b", re.IGNORECASE)
 _LOWQ_RE  = re.compile(
-    r"\b(CAM|CAMRIP|HDCAM|TS|TELESYNC|TC|TELECINE|PDVD|SCR|SCREENER|DVDSCR)\b",
+    r"\b(CAM|CAMRIP|HDCAM|HDTS|HDTC|TS|TELESYNC|TC|TELECINE|PDVD|SCR|SCREENER|DVDSCR)\b",
     re.IGNORECASE,
 )
 # YIFY/YTS — aggressively compressed, wrong for 4K libraries

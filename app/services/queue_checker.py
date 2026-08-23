@@ -29,7 +29,7 @@ _RES_RANK: dict[str, int] = {
 
 # Exclude CAM / TS / Screener releases (word-boundary match so e.g. "BATS" is safe)
 _LOWQ_RE = re.compile(
-    r"\b(CAM|CAMRIP|HDCAM|TS|TELESYNC|TC|TELECINE|PDVD|SCR|SCREENER|DVDSCR)\b",
+    r"\b(CAM|CAMRIP|HDCAM|HDTS|HDTC|TS|TELESYNC|TC|TELECINE|PDVD|SCR|SCREENER|DVDSCR)\b",
     re.IGNORECASE,
 )
 # Exclude YIFY/YTS — aggressively compressed, wrong for 4K libraries
