@@ -2865,6 +2865,11 @@ const MovieDiscover = {
     if (d.ipt?.results?.length || d.ipt?.all_results?.length) {
       return MovieDiscover._renderIptTable(d, this._showAllQualities);
     }
+    if (d.ipt?.cam_only) {
+      // cam_only=True means cam results exist but no quality results — _renderIptTable won't
+      // be called, so we invoke it directly to get the cam_only banner + hidden cam section.
+      return MovieDiscover._renderIptTable(d, this._showAllQualities);
+    }
     if (d.ipt?.configured) {
       const watchBtn2 = d.queued
         ? `<span class="badge bg-warning text-dark ms-2"><i class="bi bi-clock-fill me-1"></i>Watching</span>`
