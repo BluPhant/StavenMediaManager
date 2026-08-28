@@ -25,10 +25,13 @@ def _get_sources():
 
 
 def _get_synced_ids(source: str) -> set[str]:
-    """Return all item IDs already recorded for this source in a single DB query."""
+    """Return all item IDs already recorded across ALL sources.
+    Source-agnostic so a torrent recorded under rtorrent isn't re-downloaded
+    when the active source switches to qbittorrent (same hash, same content).
+    """
     db = SessionLocal()
     try:
-        rows = db.query(SyncedItem.item_id).filter(SyncedItem.source == source).all()
+        rows = db.query(SyncedItem.item_id).all()
         return {r.item_id for r in rows}
     finally:
         db.close()
