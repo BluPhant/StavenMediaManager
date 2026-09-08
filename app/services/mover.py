@@ -138,6 +138,19 @@ def run_move(job_id: int, source_path: str, formatted_name: str,
                        message=f"Source directory gone (likely already moved by another job).")
             return
 
+        # Bail if the directory still contains raw download segments — the SFTP
+        # downloader writes .partN files and merges them on completion.  If parts
+        # are present the download is still in progress (or the merge failed).
+        part_files = [
+            f for root, _, files in os.walk(source_path)
+            for f in files if re.search(r"\.part\d+$", f)
+        ]
+        if part_files:
+            update_job(job_id, status="error",
+                       message=f"Download incomplete — {len(part_files)} .part file(s) still present in {source_path}. "
+                               f"Will retry when sync completes.")
+            return
+
         # ── Upgrade detection ─────────────────────────────────────────────────
         # Find any existing copy of this movie before creating dest_dir.
         # Priority: plex_path from DB (reliable even when folder names differ,
