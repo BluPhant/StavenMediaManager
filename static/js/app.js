@@ -398,6 +398,7 @@ const Views = {
     const hasMatch          = !!(matchData && matchData.match);
     const hasAudiobookMatch = isAudiobooks && hasMatch;
     const hasSwitchMatch    = !!(switchData && switchData.title);
+    const downloadComplete  = !detail.has_part_files && (detail.files && detail.files.length > 0);
     const actionBtns = [];
     if (detail.has_rar) {
       actionBtns.push(`
@@ -407,9 +408,14 @@ const Views = {
         </button>`);
     }
     if (isMovies) {
+      const moveDisabled = !hasMatch
+        ? 'disabled title="Save an IMDB match first"'
+        : !downloadComplete
+          ? 'disabled data-parts-pending="1" title="Download not complete — wait for .part files to merge"'
+          : '';
       actionBtns.push(`
         <button class="btn btn-success btn-sm" id="btn-move-library"
-                ${!hasMatch ? 'disabled title="Save an IMDB match first"' : ''}
+                ${moveDisabled}
                 onclick="Actions.move(${jsStr(category)}, ${jsStr(itemName)})">
           <i class="bi bi-box-arrow-right me-1"></i>Move to Library
         </button>`);
@@ -619,7 +625,7 @@ const MovieMatch = {
     _matchEl('match-status').innerHTML =
       '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Matched</span>';
     const moveBtn = document.getElementById('btn-move-library');
-    if (moveBtn) { moveBtn.disabled = false; moveBtn.title = ''; }
+    if (moveBtn && !moveBtn.dataset.partsPending) { moveBtn.disabled = false; moveBtn.title = ''; }
 
     _matchEl('current-match').innerHTML = `
       <div class="d-flex gap-3 align-items-start p-2 rounded mb-2

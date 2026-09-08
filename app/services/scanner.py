@@ -95,10 +95,25 @@ def get_item_details(item_path: str) -> dict[str, Any]:
         if not is_dir and _is_main_rar(entry.name):
             rar_archives.append(entry.name)
 
+    # Walk recursively to detect .partN segment files anywhere in the tree
+    has_part_files = any(
+        re.search(r"\.part\d+$", entry.name)
+        for entry in entries
+    )
+    if not has_part_files:
+        try:
+            for root, _, fnames in os.walk(item_path):
+                if any(re.search(r"\.part\d+$", f) for f in fnames):
+                    has_part_files = True
+                    break
+        except PermissionError:
+            pass
+
     return {
         "files": files,
         "has_rar": bool(rar_archives),
         "rar_archives": rar_archives,
+        "has_part_files": has_part_files,
     }
 
 

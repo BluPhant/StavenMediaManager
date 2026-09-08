@@ -1,4 +1,5 @@
 import os
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -91,6 +92,22 @@ def create_move_job(req: MoveRequest, db: Session = Depends(get_db)):
     item_path = os.path.join(settings.incoming_dir, req.category, req.item_name)
     if not os.path.isdir(item_path):
         raise HTTPException(status_code=404, detail="Item directory not found")
+
+    # Refuse to move if the directory is empty or still has .partN segment files
+    all_files = [
+        f for root, _, files in os.walk(item_path) for f in files
+    ]
+    if not all_files:
+        raise HTTPException(
+            status_code=400,
+            detail="Download not complete — directory is empty.",
+        )
+    part_files = [f for f in all_files if re.search(r"\.part\d+$", f)]
+    if part_files:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Download not complete — {len(part_files)} segment file(s) still present. Wait for the download to finish.",
+        )
 
     is_audiobooks = req.category.lower() in ("audiobooks", "audiobook")
 
