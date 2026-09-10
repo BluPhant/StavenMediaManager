@@ -265,6 +265,19 @@ def _curl_file_size(ftp_path: str) -> int:
     return 0
 
 
+_NOBODY_UID = 99
+_NOBODY_GID = 100
+
+
+def _fix_path_permissions(path: str) -> None:
+    """Set nobody:users 777 on a file or directory (best-effort)."""
+    try:
+        os.chmod(path, 0o777)
+        os.chown(path, _NOBODY_UID, _NOBODY_GID)
+    except OSError:
+        pass
+
+
 def _curl_download_segment(ftp_path: str, local_path: str,
                             byte_range: str | None = None) -> None:
     """Download one file (or range) via curl. Raises on failure."""
@@ -281,7 +294,9 @@ def _download_single_file(ftp_path: str, local_path: str,
                            size_bytes: int, threads: int,
                            cancel_check=None) -> None:
     """Download one large file using N parallel range-segment curl processes."""
-    os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+    parent = os.path.dirname(local_path) or "."
+    os.makedirs(parent, exist_ok=True)
+    _fix_path_permissions(parent)
     filename = os.path.basename(local_path)
     t_start = time.monotonic()
 
@@ -291,6 +306,7 @@ def _download_single_file(ftp_path: str, local_path: str,
         if cancel_check and cancel_check():
             raise InterruptedError("Download cancelled")
         _curl_download_segment(ftp_path, local_path)
+        _fix_path_permissions(local_path)
         return
 
     # Split into N segments
@@ -355,6 +371,7 @@ def _download_single_file(ftp_path: str, local_path: str,
                     out.write(chunk)
             os.remove(seg_path)
 
+    _fix_path_permissions(local_path)
     elapsed = max(time.monotonic() - t_start, 0.001)
     avg_mbps = (size_bytes / 1024 / 1024) / elapsed
     logger.info(f"curl ↓ done    {filename}  avg {avg_mbps:.1f} MB/s  ({elapsed:.0f}s)")
@@ -617,6 +634,7 @@ class RtorrentSource(BaseSource):
         name = item.name
 
         os.makedirs(dest_dir, exist_ok=True)
+        _fix_path_permissions(dest_dir)
 
         logger.info(
             f"curl download: {name}  ftp_path={ftp_dir}  "
@@ -701,7 +719,9 @@ class RtorrentSource(BaseSource):
             active_procs_lock = threading.Lock()
 
             def _dl_one(ftp_path: str, local_path: str) -> None:
-                os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+                parent = os.path.dirname(local_path) or "."
+                os.makedirs(parent, exist_ok=True)
+                _fix_path_permissions(parent)
                 cmd = _curl_base() + ["--output", local_path, _ftp_url(ftp_path)]
                 p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 with active_procs_lock:
@@ -713,6 +733,7 @@ class RtorrentSource(BaseSource):
                 if p.returncode != 0:
                     err = stderr.decode(errors="replace").strip()
                     raise RuntimeError(f"curl failed ({p.returncode}): {err}")
+                _fix_path_permissions(local_path)
                 completed[0] += 1
 
             def _kill_all_procs():

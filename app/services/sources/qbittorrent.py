@@ -165,11 +165,26 @@ def _curl_sftp_base() -> list[str]:
     return cmd
 
 
+_NOBODY_UID = 99
+_NOBODY_GID = 100
+
+
+def _fix_path_permissions(path: str) -> None:
+    """Set nobody:users 777 on a file or directory (best-effort)."""
+    try:
+        os.chmod(path, 0o777)
+        os.chown(path, _NOBODY_UID, _NOBODY_GID)
+    except OSError:
+        pass
+
+
 def _download_single_sftp(remote_path: str, local_path: str,
                            size_bytes: int, threads: int,
                            cancel_check=None) -> None:
     """Download one file via SFTP using N parallel range-segment curl processes."""
-    os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+    parent = os.path.dirname(local_path) or "."
+    os.makedirs(parent, exist_ok=True)
+    _fix_path_permissions(parent)
     filename = os.path.basename(local_path)
     url = _sftp_url(remote_path)
     t_start = time.monotonic()
@@ -187,6 +202,7 @@ def _download_single_sftp(remote_path: str, local_path: str,
                 f"curl sftp failed ({result.returncode}): "
                 f"{result.stderr.decode(errors='replace').strip()}"
             )
+        _fix_path_permissions(local_path)
         return
 
     seg_size = size_bytes // threads
@@ -241,6 +257,7 @@ def _download_single_sftp(remote_path: str, local_path: str,
                     out.write(chunk)
             os.remove(seg_path)
 
+    _fix_path_permissions(local_path)
     elapsed = max(time.monotonic() - t_start, 0.001)
     logger.info(f"sftp ↓ done  {filename}  avg {(size_bytes/1024/1024)/elapsed:.1f} MB/s  ({elapsed:.0f}s)")
 
@@ -412,6 +429,7 @@ class QbittorrentSource(BaseSource):
         name         = item.name
 
         os.makedirs(dest_dir, exist_ok=True)
+        _fix_path_permissions(dest_dir)
         logger.info(f"sftp download: {name}  is_multi={is_multi}  size={total_bytes/1024/1024:.1f} MB")
 
         t_start  = time.monotonic()
