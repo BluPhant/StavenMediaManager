@@ -367,6 +367,7 @@ const Views = {
   async item(category, itemName) {
     this._loading();
     const isMovies     = /movie/i.test(category);
+    const isTV         = /^tv$/i.test(category);
     const isMusic      = /music/i.test(category);
     const isSwitch     = /switch/i.test(category);
     const isAudiobooks = /audiobook/i.test(category);
@@ -442,6 +443,18 @@ const Views = {
                 title="Convert FLAC → MP3 V0, tag, embed cover art, and file into the library"
                 onclick="Actions.musicImport(${jsStr(category)}, ${jsStr(itemName)})">
           <i class="bi bi-music-note-beamed me-1"></i>Convert &amp; Import
+        </button>`);
+    }
+    if (isTV) {
+      const tvOrganizeDisabled = !downloadComplete
+        ? 'disabled data-parts-pending="1" title="Download not complete — wait for .part files to merge"'
+        : '';
+      actionBtns.push(`
+        <button class="btn btn-success btn-sm" id="btn-tv-organize"
+                ${tvOrganizeDisabled}
+                title="Use FileBot to identify episodes and move them into the TV library"
+                onclick="Actions.tvOrganize(${jsStr(category)}, ${jsStr(itemName)})">
+          <i class="bi bi-tv me-1"></i>Organize &amp; Move
         </button>`);
     }
     const actionsHtml = actionBtns.length ? `
@@ -1512,6 +1525,17 @@ const Actions = {
       toast(`Music import started — Job #${job.id}`, 'success');
     } catch (e) {
       toast(`Could not start music import: ${e.message}`, 'danger');
+    }
+  },
+
+  async tvOrganize(category, itemName) {
+    try {
+      const job = await API.post('/jobs/tv-organize', { category, item_name: itemName });
+      JobPoller.track(job.id, { type: 'tv_organize', category, itemName });
+      JobsPanel.open();
+      toast(`TV organize started — Job #${job.id}`, 'success');
+    } catch (e) {
+      toast(`Could not start TV organize: ${e.message}`, 'danger');
     }
   },
 
@@ -3272,6 +3296,7 @@ const AboutPage = {
           { name: 'GameTDB',     desc: 'Switch game IDs and cover art (web scrape)' },
           { name: 'nswdb',       desc: 'Nintendo Switch scene release database' },
           { name: 'Awoo / Tinfoil NET', desc: 'Network install protocol (TCP 2000) for Switch' },
+          { name: 'FileBot',         desc: 'TV episode identification and renaming (docker exec into jlesage/filebot)' },
         ]},
       { group: 'Infrastructure',
         items: [

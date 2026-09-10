@@ -124,6 +124,14 @@ def submit_queue_check(job_id: int) -> None:
     _executor.submit(_guarded, job_id, run_queue_check)
 
 
+def submit_tv_organize(job_id: int, source_path: str) -> None:
+    from ..services.filebot import run_tv_organize
+
+    _register(job_id)
+    update_job(job_id, status="running", progress=0)
+    _executor.submit(_guarded, job_id, run_tv_organize, source_path)
+
+
 def submit_single_movie_check(job_id: int, imdb_id: str) -> None:
     from ..services.queue_checker import run_single_movie_check
 

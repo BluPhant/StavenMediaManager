@@ -15,10 +15,12 @@ A personal home-media management tool I built for my own Unraid setup and am mak
 - **Watching queue** — Add movies that aren't on IPT yet. An immediate check job fires on queue; a background scheduler re-checks every 4 hours and auto-grabs when a copy at your minimum quality appears.
 - **Search history** — Every confirmed movie search is recorded with Plex/seedbox/IPT status cached. One-click refresh re-runs all checks live.
 - **Audiobook Find** — Dedicated audiobook search in the Find page. Search by title, author, or both. Results pull from Audible/Audnexus and are cross-referenced against IPT audiobook torrents in parallel; IPT-available books are highlighted and sorted first. Selecting a result shows a presence check against your local library folder and the seedbox before confirming.
-- **Seedbox sync** — Polls a qBittorrent or rTorrent seedbox for completed torrents in a watched category/label, downloads them over SFTP/FTPS (parallel byte-range segments), and moves them into the local media library.
+- **Seedbox sync** — Polls a qBittorrent or rTorrent seedbox for completed torrents in a watched category/label, downloads them over SFTP/FTPS (parallel byte-range segments), and moves them into the local media library. Files are owned nobody:users 777 on arrival so Unraid/Plex can read them immediately.
+- **Download completeness guard** — The "Move to Library" button is disabled while parallel SFTP segment files (`.part0`, `.part1`, …) are still being merged. The API also refuses to queue a move job for an incomplete or empty directory, preventing partial content from landing in the library.
+- **TV organize via FileBot** — TV Incoming items show an **Organize & Move** button. Clicking it runs FileBot (via `docker exec`) against the folder: it identifies every episode via TheMovieDB, fuzzy-matches the series against your existing library folders, and moves files directly into the correct `Season XX/` structure with proper naming. Creates a new series folder if the show isn't in the library yet. Permissions are fixed and Plex is refreshed automatically.
 - **TV / general search** — Search IPTorrents (TV, music, audiobooks, games, etc.) or BroadcasTheNet for TV. Grab and load directly into qBittorrent or rTorrent.
 - **Plex integration** — Full library scan with IMDB ID and resolution data, 60-second cache, targeted path refresh after every move.
-- **Job tracking** — All jobs (sync, move, extract, queue-check, upgrade-check) are tracked in SQLite with live progress in the UI.
+- **Job tracking** — All jobs (sync, move, extract, tv_organize, queue-check, upgrade-check) are tracked in SQLite with live progress in the UI.
 - **System health** — About page runs live checks against all connected services (Plex, rTorrent, IPTorrents, BTN, TMDB, Audible) and reports latency or error detail.
 
 ---
@@ -49,6 +51,7 @@ docker run -d \
   -p 8080:8080 \
   -v /path/to/media:/media \
   -v /path/to/appdata:/config \
+  -v /var/run/docker.sock:/var/run/docker.sock \
   -e TMDB_API_KEY=your_key \
   -e PLEX_URL=http://192.168.1.x:32400 \
   -e PLEX_TOKEN=your_plex_token \
@@ -58,6 +61,8 @@ docker run -d \
 The app will be available at `http://localhost:8080`.
 
 > **Note:** A single `/media` mount covers both incoming downloads and the library. Incoming files land at `/media/temp/Incoming` by default. Do **not** add a separate `/incoming` mount — it would cause full file copies instead of instant renames.
+
+> **Docker socket:** `/var/run/docker.sock` is mounted so the app can run `docker exec FileBot …` for the TV organize feature. If you don't use FileBot, this mount is optional — the feature will fail gracefully with an error in the job log.
 
 ### Docker Compose
 
@@ -72,6 +77,7 @@ services:
     volumes:
       - /path/to/media:/media
       - /path/to/appdata:/config
+      - /var/run/docker.sock:/var/run/docker.sock  # optional — required for FileBot TV organize
     environment:
       - TMDB_API_KEY=your_key
       - PLEX_URL=http://192.168.1.x:32400
@@ -142,6 +148,16 @@ Downloads via FTPS (curl). Connects via XMLRPC for torrent state; uses FTPS for 
 | `RTORRENT_FTP_ROOT` | — | Absolute FTP root on the server, e.g. `/home/username` |
 | `RTORRENT_FTP_THREADS` | `4` | Parallel connections per torrent download |
 
+### FileBot TV organize (optional)
+
+The TV **Organize & Move** feature delegates to a running [jlesage/filebot](https://hub.docker.com/r/jlesage/filebot) container via `docker exec`. No extra environment variables are needed — the container name `FileBot` is assumed. Prerequisites:
+
+1. Run the FileBot container with your media share mounted as `/storage`.
+2. Activate your FileBot license inside the container.
+3. Mount `/var/run/docker.sock` into the StavenMediaManager container (see above).
+
+The app maps its own `/media` mount to `/storage` inside FileBot automatically.
+
 ### IPTorrents search (optional)
 
 | Variable | Default | Description |
@@ -164,14 +180,18 @@ Downloads via FTPS (curl). Connects via XMLRPC for torrent state; uses FTPS for 
 |---|---|
 | `/media` | Your media library root — subdirectories become categories. Incoming files land at `/media/temp/Incoming`. |
 | `/config` | Persistent data: SQLite database, optional SSH keys |
+| `/var/run/docker.sock` | Host Docker socket — optional, required only for the FileBot TV organize feature |
 
 ---
 
 ## Notes
 
 - The seedbox sync uses **SFTP** (via curl) for qBittorrent and **FTPS** (FTP over TLS, via curl) for rTorrent. Both use parallel byte-range segments for throughput. Configure qBittorrent env vars to use qBittorrent; it takes priority over rTorrent when both are set.
+- Downloaded files are chowned to `nobody:users` (uid 99, gid 100) with mode 777 on arrival, matching Unraid share defaults. The mover applies the same fix after moving files into the library.
 - Category detection is driven by the subdirectory structure under `/media` — create a folder called `movies`, `audiobooks`, etc. and the UI picks it up automatically.
+- The **Move to Library** button for movies is gated behind download completeness: it stays disabled while `.partN` byte-range segment files are still being merged, and the API rejects move requests on empty or incomplete directories.
 - Movie upgrades: when a better copy is imported over an existing one, the old file moves to `/media/movies/.trash/` pending a review in the **Movies → Pending Review** tab.
+- **TV organize** uses [FileBot](https://www.filebot.net/) running in its own container. The app calls `docker exec FileBot /opt/filebot/filebot -rename …` and maps paths automatically. A valid FileBot license must be activated in the FileBot container.
 - Plex is the system of record for local media. The movie tracking tables in this app store workflow state only — what you searched, what's downloading, what needs a review.
 - No authentication on the web UI — intended for use on a private LAN or behind a VPN.
 - Built and tested against an **Ultra Seedbox** (usbx.me) setup. Other rTorrent providers should work but YMMV.

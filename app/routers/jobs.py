@@ -202,6 +202,62 @@ def create_music_import_job(req: MusicImportRequest, db: Session = Depends(get_d
     return job
 
 
+class TvOrganizeRequest(BaseModel):
+    category: str
+    item_name: str
+
+
+@router.post("/tv-organize", status_code=201)
+def create_tv_organize_job(req: TvOrganizeRequest, db: Session = Depends(get_db)):
+    """
+    Run FileBot to rename and move TV episodes from Incoming into the library.
+    FileBot matches each file against TheMovieDB::TV and organises it into the
+    correct series/season folder, creating the series folder if it doesn't exist.
+    """
+    item_path = os.path.join(settings.incoming_dir, req.category, req.item_name)
+    if not os.path.isdir(item_path):
+        raise HTTPException(status_code=404, detail="Item directory not found")
+
+    all_files = [f for _, _, files in os.walk(item_path) for f in files]
+    if not all_files:
+        raise HTTPException(
+            status_code=400,
+            detail="Directory is empty — nothing to organize.",
+        )
+    part_files = [f for f in all_files if re.search(r"\.part\d+$", f)]
+    if part_files:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Download incomplete — {len(part_files)} segment file(s) still present.",
+        )
+
+    existing = (
+        db.query(Job)
+        .filter(Job.source_path == item_path, Job.status.in_(["pending", "running"]))
+        .first()
+    )
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A job is already active for this item (id={existing.id})",
+        )
+
+    job = Job(
+        type="tv_organize",
+        category=req.category,
+        item_name=req.item_name,
+        source_path=item_path,
+        status="pending",
+        progress=0,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    job_manager.submit_tv_organize(job.id, item_path)
+    return job
+
+
 @router.post("/{job_id}/cancel")
 def cancel_job(job_id: int, db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id).first()

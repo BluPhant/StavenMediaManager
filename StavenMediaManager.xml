@@ -30,7 +30,8 @@
   <WebUI>http://[IP]:[PORT:8088]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/StavenMediaManager.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/BluPhant/StavenMediaManager/main/unraid/icon.png</Icon>
-  <ExtraParams/>
+  <!-- Docker socket is required for the FileBot TV organize feature (docker exec FileBot ...) -->
+  <ExtraParams>--mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DonateText/>
