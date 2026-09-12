@@ -104,20 +104,12 @@ def _fix_permissions_tree(path: str) -> None:
 
 
 def _plex_refresh() -> None:
-    """Trigger a Plex library refresh — best-effort, non-fatal."""
-    if not settings.plex_url or not settings.plex_token:
-        return
+    """Trigger a targeted Plex TV section refresh — best-effort, non-fatal."""
     try:
-        import urllib.request
-        url = (
-            f"{settings.plex_url.rstrip('/')}/library/sections/all/refresh"
-            f"?X-Plex-Token={settings.plex_token}"
-        )
-        with urllib.request.urlopen(url, timeout=10):
-            pass
-        logger.info("Plex library refresh triggered.")
+        from . import plex as plex_svc
+        plex_svc.refresh_tv_section()
     except Exception as exc:
-        logger.warning(f"Plex refresh failed (non-fatal): {exc}")
+        logger.warning(f"Plex TV refresh failed (non-fatal): {exc}")
 
 
 def run_tv_organize(job_id: int, source_path: str) -> None:

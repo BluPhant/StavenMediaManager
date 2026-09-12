@@ -29,6 +29,7 @@ RESOLUTION_RANK: dict[str, int] = {
 TARGET_RANK = 4  # 2160p / 4K
 
 _movie_section_id: str | None = None   # cached after first successful lookup
+_tv_section_id:    str | None = None   # cached after first successful lookup
 _library_cache:   dict | None = None   # {imdb_id: {...}}
 _library_cache_at: float = 0.0
 _CACHE_TTL = 60.0  # seconds
@@ -91,15 +92,41 @@ def refresh_library_path(path: str | None = None) -> None:
 
 def get_section_id_for_movies() -> str | None:
     """Return the cached Plex movie section ID (calls API once if not cached)."""
-    return _get_section_id()
+    return _get_section_id("movie")
+
+
+def get_section_id_for_tv() -> str | None:
+    """Return the cached Plex TV show section ID (calls API once if not cached)."""
+    return _get_section_id("show")
+
+
+def refresh_tv_section() -> None:
+    """Trigger a targeted Plex refresh on the TV show section (best-effort)."""
+    if not (settings.plex_url and settings.plex_token):
+        return
+    try:
+        base  = settings.plex_url.rstrip("/")
+        token = settings.plex_token
+        sid   = get_section_id_for_tv()
+        url   = (
+            f"{base}/library/sections/{sid}/refresh?X-Plex-Token={token}"
+            if sid else
+            f"{base}/library/sections/all/refresh?X-Plex-Token={token}"
+        )
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=10):  # noqa: S310
+            pass
+        logger.info(f"Plex TV section refresh triggered (section={sid or 'all'})")
+    except Exception as exc:
+        logger.warning(f"Plex TV refresh failed (non-fatal): {exc}")
 
 
 # ── Internal ──────────────────────────────────────────────────────────────────
 
-def _get_section_id() -> str | None:
-    global _movie_section_id
-    if _movie_section_id is not None:
-        return _movie_section_id
+def _get_section_id(plex_type: str) -> str | None:
+    global _movie_section_id, _tv_section_id
+    cached = _movie_section_id if plex_type == "movie" else _tv_section_id
+    if cached is not None:
+        return cached
     if not (settings.plex_url and settings.plex_token):
         return None
     try:
@@ -108,10 +135,15 @@ def _get_section_id() -> str | None:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             data = json.loads(resp.read().decode())
         for section in data.get("MediaContainer", {}).get("Directory", []):
-            if section.get("type") == "movie":
-                _movie_section_id = str(section["key"])
-                logger.info(f"Plex movie section ID cached: {_movie_section_id}")
-                return _movie_section_id
+            t   = section.get("type")
+            key = str(section["key"])
+            if t == "movie" and _movie_section_id is None:
+                _movie_section_id = key
+                logger.info(f"Plex movie section ID cached: {key}")
+            if t == "show" and _tv_section_id is None:
+                _tv_section_id = key
+                logger.info(f"Plex TV section ID cached: {key}")
+        return _movie_section_id if plex_type == "movie" else _tv_section_id
     except Exception as exc:
         logger.warning(f"Plex section lookup failed: {exc}")
     return None
