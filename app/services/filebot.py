@@ -145,6 +145,7 @@ def run_tv_organize(job_id: int, source_path: str) -> None:
         "docker", "exec", FILEBOT_CONTAINER,
         FILEBOT_BIN, "-rename",
         source_storage,
+        "-r",
         "--db", "TheMovieDB::TV",
         "--output", output_storage,
         "--format", fmt,
