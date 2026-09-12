@@ -1,3 +1,4 @@
+FROM docker:cli AS docker-cli
 FROM python:3.11-slim
 
 # ── Static Unraid UI hints (don't change) ─────────────────────────────────────
@@ -21,6 +22,9 @@ LABEL org.opencontainers.image.source="${IMAGE_SOURCE}"
 LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 LABEL org.opencontainers.image.revision="${IMAGE_REVISION}"
 LABEL org.opencontainers.image.licenses="${IMAGE_LICENSES}"
+
+# ── Docker CLI (for FileBot TV organize — docker exec FileBot filebot ...) ────
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 
 # ── System deps ───────────────────────────────────────────────────────────────
 # ffmpeg provides both `ffmpeg` (FLAC→MP3 conversion) and `ffprobe` (tag/stream
